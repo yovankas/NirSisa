@@ -1,0 +1,169 @@
+// NirSisa ERD - Entity Relationship Diagram
+// Visualize at https://dbdiagram.io
+// Database: PostgreSQL (Supabase)
+
+// ============================================================
+// AUTH LAYER (managed by Supabase Auth - auth.users)
+// We only extend it with a profiles table.
+// ============================================================
+
+Table profiles {
+  id uuid [pk, ref: - auth.users.id, note: 'FK to Supabase auth.users']
+  display_name varchar(100)
+  avatar_url text
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+}
+
+// ============================================================
+// RECIPE KNOWLEDGE BASE
+// Seeded from Indonesian_Food_Recipes_Cleaned.csv
+// ============================================================
+
+Table recipe_categories {
+  id serial [pk]
+  name varchar(50) [unique, not null, note: 'ayam, ikan, kambing, sapi, tahu, telur, tempe, udang']
+}
+
+Table recipes {
+  id serial [pk]
+  title varchar(255) [not null]
+  title_cleaned varchar(255) [not null]
+  ingredients text [not null, note: 'Original raw ingredients string']
+  ingredients_cleaned text [not null, note: 'Cleaned/tokenized ingredients for TF-IDF']
+  steps text [not null]
+  total_ingredients smallint [not null]
+  total_steps smallint [not null]
+  loves integer [default: 0]
+  url text
+  category_id integer [ref: > recipe_categories.id, not null]
+  created_at timestamptz [default: `now()`]
+
+  indexes {
+    category_id
+    title_cleaned
+  }
+}
+
+// Pre-computed TF-IDF vectors stored as binary (joblib serialized)
+Table recipe_tfidf_cache {
+  id serial [pk]
+  version varchar(20) [not null, note: 'Model version identifier']
+  vectorizer_blob bytea [not null, note: 'Serialized TfidfVectorizer via joblib']
+  tfidf_matrix_blob bytea [not null, note: 'Serialized sparse TF-IDF matrix via joblib']
+  recipe_id_order jsonb [not null, note: 'Ordered list of recipe IDs matching matrix rows']
+  fitted_at timestamptz [default: `now()`]
+
+  indexes {
+    (version) [unique]
+  }
+}
+
+// ============================================================
+// SHELF-LIFE REFERENCE
+// Standard expiry estimates per ingredient category (BPOM)
+// ============================================================
+
+Table ingredient_categories {
+  id serial [pk]
+  name varchar(100) [unique, not null, note: 'e.g. sayur, daging, buah, dairy, bumbu kering']
+}
+
+Table shelf_life_reference {
+  id serial [pk]
+  ingredient_name varchar(150) [not null, note: 'Specific ingredient or sub-category']
+  category_id integer [ref: > ingredient_categories.id, not null]
+  shelf_life_days integer [not null, note: 'Estimated days in refrigerator']
+  storage_condition varchar(50) [default: 'kulkas', note: 'kulkas / freezer / suhu_ruang']
+  source varchar(255) [note: 'BPOM, literature, etc.']
+
+  indexes {
+    ingredient_name
+    category_id
+  }
+}
+
+// ============================================================
+// USER INVENTORY (Digital Kulkas)
+// ============================================================
+
+Table inventory_stock {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [ref: > profiles.id, not null]
+  item_name varchar(150) [not null, note: 'Raw user input']
+  item_name_normalized varchar(150) [note: 'After fuzzy matching / normalization']
+  category_id integer [ref: > ingredient_categories.id]
+  quantity decimal(10,2) [not null, default: 1]
+  unit varchar(30) [default: 'buah']
+  expiry_date date [note: 'User-provided or estimated from shelf_life_reference']
+  is_natural boolean [default: false, note: 'True if no packaging expiry; estimated from shelf_life']
+  added_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+
+  indexes {
+    user_id
+    expiry_date
+    (user_id, item_name_normalized)
+  }
+}
+
+// ============================================================
+// CONSUMPTION HISTORY LOG
+// Tracks what users cooked and which ingredients were used
+// ============================================================
+
+Table consumption_history {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [ref: > profiles.id, not null]
+  recipe_id integer [ref: > recipes.id]
+  recipe_title varchar(255) [note: 'Denormalized for display even if recipe deleted']
+  cooked_at timestamptz [default: `now()`]
+
+  indexes {
+    user_id
+    cooked_at
+  }
+}
+
+Table consumption_history_items {
+  id uuid [pk, default: `gen_random_uuid()`]
+  consumption_id uuid [ref: > consumption_history.id, not null]
+  inventory_stock_id uuid [ref: > inventory_stock.id]
+  item_name varchar(150) [not null]
+  quantity_used decimal(10,2) [not null]
+  unit varchar(30)
+}
+
+// ============================================================
+// DEVICE TOKENS (FCM Push Notifications)
+// ============================================================
+
+Table device_tokens {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [ref: > profiles.id, not null]
+  fcm_token text [unique, not null]
+  device_info varchar(255)
+  is_active boolean [default: true]
+  created_at timestamptz [default: `now()`]
+  updated_at timestamptz [default: `now()`]
+
+  indexes {
+    user_id
+    fcm_token [unique]
+  }
+}
+
+// ============================================================
+// NOTIFICATION LOG (for debugging and analytics)
+// ============================================================
+
+Table notification_log {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [ref: > profiles.id, not null]
+  inventory_stock_id uuid [ref: > inventory_stock.id]
+  notification_type varchar(50) [not null, note: 'expiry_warning, expiry_critical']
+  title varchar(255)
+  body text
+  sent_at timestamptz [default: `now()`]
+  delivered boolean [default: false]
+}
