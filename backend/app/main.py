@@ -8,13 +8,13 @@ import os
 
 app = FastAPI(title="NirSisa API")
 
-# --- PATH CONFIGURATION ---
+# Path setup untuk model dan data
 # Mengambil path absolut agar tidak error saat dideploy di Docker/Railway
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(CURRENT_DIR, "ml_models")
 DATA_PATH = os.path.join(CURRENT_DIR, "data")
 
-# --- LOAD ASSETS ---
+# Load assets (model dan data)
 try:
     vectorizer = joblib.load(os.path.join(MODEL_PATH, "tfidf_vectorizer.pkl"))
     tfidf_matrix = joblib.load(os.path.join(MODEL_PATH, "recipe_matrix.pkl"))
@@ -22,7 +22,7 @@ try:
 except Exception as e:
     print(f"Error loading models: {e}")
 
-# --- SCHEMAS ---
+# Schema
 class IngredientItem(BaseModel):
     name: str
     days_left: int
@@ -30,7 +30,7 @@ class IngredientItem(BaseModel):
 class RecommendRequest(BaseModel):
     ingredients: List[IngredientItem]
 
-# --- AI LOGIC (SPI) ---
+# Fungsi untuk menghitung SPI (Novelty NirSisa)
 def calculate_spi(days_remaining, alpha=2.0):
     return 1 / ((days_remaining + 1) ** alpha)
 
@@ -44,24 +44,23 @@ def recommend(request: RecommendRequest):
         user_ingredients = [item.name for item in request.ingredients]
         inventory_expiry = {item.name: item.days_left for item in request.ingredients}
         
-        # 1. Similarity Score
+        # Menghitung Similarity Score
         user_input_text = ' '.join(user_ingredients)
         user_vector = vectorizer.transform([user_input_text])
         from sklearn.metrics.pairwise import cosine_similarity
         cos_sim = cosine_similarity(user_vector, tfidf_matrix).flatten()
         
-        # 2. SPI Score (Novelty NirSisa)
+        # Menghitung SPI Score (Novelty NirSisa)
         spi_scores = np.zeros(len(df_recipes))
         for ingredient, days in inventory_expiry.items():
             urgency_score = calculate_spi(days)
-            # Pastikan kolom 'Ingredients Cleaned' sesuai dengan di dataframe Anda
             mask = df_recipes['Ingredients Cleaned'].str.contains(ingredient, case=False, na=False)
             spi_scores[mask] += urgency_score
             
-        # 3. Final Hybrid Score
+        # Menghitung Final Hybrid Score
         final_scores = (cos_sim * 0.6) + (spi_scores * 0.4)
         
-        # 4. Get Top 10
+        # Mengambil 10 resep teratas
         top_indices = final_scores.argsort()[-10:][::-1]
         results = []
         for idx in top_indices:
