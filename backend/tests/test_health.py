@@ -1,16 +1,5 @@
-"""
-Smoke tests for API startup and health check.
-"""
-
-import os
 import pytest
 from fastapi.testclient import TestClient
-
-# Skip if no Supabase credentials (e.g. local dev without .env)
-pytestmark = pytest.mark.skipif(
-    not os.getenv("SUPABASE_URL"),
-    reason="SUPABASE_URL not set — skipping integration tests",
-)
 
 
 @pytest.fixture
@@ -22,7 +11,7 @@ def client():
 def test_root(client):
     r = client.get("/")
     assert r.status_code == 200
-    assert r.json()["app"] == "NirSisa API"
+    assert "NirSisa" in r.json()["status"]
 
 
 def test_health(client):
@@ -45,3 +34,28 @@ def test_recipes_requires_auth(client):
 def test_recommend_requires_auth(client):
     r = client.get("/recommend")
     assert r.status_code in (401, 403)
+
+
+def test_legacy_recommend_no_auth(client):
+    # Legacy POST /recommend tetap jalan tanpa auth
+    response = client.post("/recommend", json={
+        "ingredients": [
+            {"name": "bayam", "days_left": 1},
+            {"name": "ayam", "days_left": 5},
+        ]
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert "recommendations" in data
+    assert len(data["recommendations"]) > 0
+    assert "title" in data["recommendations"][0]
+    assert "score" in data["recommendations"][0]
+
+
+def test_health_ai_engine(client):
+    # Health endpoint harus juga report status AI engine
+    r = client.get("/health")
+    assert r.status_code == 200
+    data = r.json()
+    assert "ai_engine_loaded" in data
+    assert "total_recipes" in data
