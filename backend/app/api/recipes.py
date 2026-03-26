@@ -1,3 +1,5 @@
+# Cari resep dari DB
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import get_current_user_id
@@ -15,6 +17,7 @@ async def list_recipes(
     offset: int = Query(default=0, ge=0),
     _: str = Depends(get_current_user_id),
 ):
+    # Daftar resep dengan filter kategori dan pencarian judul 
     sb = get_supabase()
     query = (
         sb.table("recipes")
@@ -45,6 +48,7 @@ async def get_recipe(
     recipe_id: int,
     _: str = Depends(get_current_user_id),
 ):
+    # Ambil detail satu resep berdasarkan ID 
     sb = get_supabase()
     result = (
         sb.table("recipes")
@@ -55,7 +59,7 @@ async def get_recipe(
     )
 
     if not result.data:
-        raise HTTPException(status_code=404, detail="Recipe not found")
+        raise HTTPException(status_code=404, detail="Resep tidak ditemukan.")
 
     row = result.data
     cat = row.pop("recipe_categories", None)
