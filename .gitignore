@@ -9,3 +9,160 @@ node_modules/
 .nirsisa/
 nirsisa/
 .DS_Store
+
+
+NIRSISA/
+├── .github/
+│   └── workflows/
+│       └── backend-ci.yml
+├── backend/
+│   ├── __pycache__/
+│   ├── .pytest_cache/
+│   ├── app/
+│   │   ├── __pycache__/
+│   │   ├── ai/
+│   │   │   ├── __pycache__/
+│   │   │   ├── __init__.py
+│   │   │   ├── cbf.py
+│   │   │   ├── preprocessing.py
+│   │   │   ├── recommend.py
+│   │   │   ├── recommender.py
+│   │   │   └── spi.py
+│   │   ├── api/
+│   │   │   ├── __pycache__/
+│   │   │   ├── __init__.py
+│   │   │   ├── health.py
+│   │   │   ├── inventory.py
+│   │   │   ├── recipes.py
+│   │   │   └── recommend.py
+│   │   ├── core/
+│   │   │   ├── __pycache__/
+│   │   │   ├── __init__.py
+│   │   │   ├── auth.py
+│   │   │   ├── config.py
+│   │   │   └── supabase.py
+│   │   ├── data/
+│   │   │   └── recipe_data.pkl
+│   │   ├── ml_models/
+│   │   │   ├── recipe_matrix.pkl
+│   │   │   └── tfidf_vectorizer.pkl
+│   │   ├── models/
+│   │   │   └── __init__.py
+│   │   ├── schemas/
+│   │   │   ├── __pycache__/
+│   │   │   ├── __init__.py
+│   │   │   ├── inventory.py
+│   │   │   └── recipe.py
+│   │   ├── services/
+│   │   │   ├── __pycache__/
+│   │   │   ├── __init__.py
+│   │   │   ├── inventory_service.py
+│   │   │   └── normalizer.py
+│   │   ├── __init__.py
+│   │   └── main.py
+│   ├── tests/
+│   │   ├── __pycache__/
+│   │   ├── __init__.py
+│   │   ├── test_health.py
+│   │   ├── test_normalizer.py
+│   │   ├── test_recommender.py
+│   │   └── test_spi.py
+│   ├── .dockerignore
+│   ├── .env
+│   ├── .env.example
+│   ├── .gitignore
+│   ├── conftest.py
+│   ├── docker-compose.yml
+│   ├── Dockerfile
+│   ├── Procfile
+│   ├── railway.toml
+│   └── requirements.txt
+├── database/
+│   ├── artifacts/
+│   │   ├── recipe_ids.json
+│   │   ├── tfidf_matrix.joblib
+│   │   └── tfidf_vectorizer.joblib
+│   ├── migrations/
+│   │   ├── 001_schema.sql
+│   │   ├── 002_rls_policies.sql
+│   │   └── 003_seed_shelf_life.sql
+│   ├── seed/
+│   │   ├── seed_recipes.py
+│   │   └── vectorize_recipes.py
+│   ├── erd_diagram.md
+│   ├── erd_nirsisa.png
+│   ├── erd.dbml
+│   ├── generate_erd_image.py
+│   └── requirements.txt
+├── EDA Dataset/
+│   ├── 01_distribusi_kategori.png
+│   ├── 02_distribusi_loves.png
+│   ├── 03_distribusi_ingredients.png
+│   ├── 04_distribusi_steps.png
+│   ├── 05_outlier_analysis.png
+│   ├── 06_korelasi.png
+│   ├── 07_loves_per_kategori.png
+│   ├── 08_kompleksitas_per_kategori.png
+│   ├── 09_top_ingredients.png
+│   ├── 10_wordcloud_titles.png
+│   ├── 11_panjang_resep.png
+│   ├── EDA_Indonesian_Food_Recipes.ipynb
+│   ├── Indonesian_Food_Recipes_Cleaned.csv
+│   ├── Indonesian_Food_Recipes.csv
+│   └── testing_model.ipynb
+├── mobile/
+│   ├── __tests__/
+│   ├── .bundle/
+│   ├── android/
+│   │   ├── app/
+│   │   ├── gradle/
+│   │   ├── build.gradle
+│   │   ├── gradle.properties
+│   │   ├── gradlew
+│   │   ├── gradlew.bat
+│   │   └── settings.gradle
+│   ├── ios/
+│   │   ├── mobile/
+│   │   ├── mobile.xcodeproj/
+│   │   ├── .xcode.env
+│   │   └── Podfile
+│   ├── src/
+│   │   ├── assets/
+│   │   │   ├── fonts/
+│   │   │   ├── images/
+│   │   │   └── .gitkeep
+│   │   ├── components/
+│   │   │   └── .gitkeep
+│   │   ├── context/
+│   │   │   └── .gitkeep
+│   │   ├── hooks/
+│   │   │   └── .gitkeep
+│   │   ├── navigation/
+│   │   │   └── .gitkeep
+│   │   ├── screens/
+│   │   │   └── .gitkeep
+│   │   ├── services/
+│   │   │   └── .gitkeep
+│   │   ├── utils/
+│   │   │   └── .gitkeep
+│   │   └── .gitkeep
+│   ├── App.tsx
+│   ├── .eslintrc.js
+│   ├── .gitignore
+│   ├── .prettierrc.js
+│   ├── .watchmanconfig
+│   ├── app.json
+│   ├── babel.config.js
+│   ├── Gemfile
+│   ├── Gemfile.lock
+│   ├── index.js
+│   ├── jest.config.js
+│   ├── metro.config.js
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── README.md
+│   └── tsconfig.json
+├── nirsisa/
+├── .gitignore
+├── README.md
+└── requirements.txt
