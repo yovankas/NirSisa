@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Optional, List, Dict # Pastikan import dari typing, bukan pyparsing
 
-from pyparsing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -16,9 +16,10 @@ class InventoryItemCreate(BaseModel):
     expiry_date: date | None = Field(default=None, examples=["2026-04-01"])
     is_natural: bool = Field(
         default=False,
-        description="True untuk bahan alami (sayur, daging, buah) "
-                    "agar sistem mengestimasi kedaluwarsa otomatis.",
+        description="True untuk bahan alami (sayur, daging, buah) agar sistem mengestimasi kedaluwarsa otomatis.",
     )
+    # PENTING: Tambahkan ini agar kategori dari HP bisa diterima saat POST
+    category_name: str | None = Field(default=None, examples=["Sayuran"])
 
 
 class InventoryItemUpdate(BaseModel):
@@ -27,8 +28,7 @@ class InventoryItemUpdate(BaseModel):
     quantity: float | None = Field(default=None, gt=0)
     unit: str | None = Field(default=None, max_length=30)
     expiry_date: date | None = None
-    category_name: Optional[str] = None # <--- TAMBAHKAN INI
-
+    category_name: str | None = None 
 
 
 # Output schemas
@@ -61,7 +61,7 @@ class ReconciliationRequest(BaseModel):
     # Request body untuk konfirmasi selesai masak 
     recipe_id: int = Field(..., description="ID resep yang dimasak")
     recipe_title: str = Field(..., min_length=1, max_length=300)
-    ingredients_used: list[IngredientUsage] = Field(
+    ingredients_used: List[IngredientUsage] = Field(
         ..., min_length=1, description="Daftar bahan yang digunakan beserta jumlahnya"
     )
 
@@ -70,5 +70,5 @@ class ReconciliationResponse(BaseModel):
     # Response setelah reconciliation berhasil 
     status: str
     recipe_title: str
-    items_updated: list[dict] = []
-    items_removed: list[str] = []
+    items_updated: List[dict] = []
+    items_removed: List[str] = []
