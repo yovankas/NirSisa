@@ -9,8 +9,15 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { supabase } from "../services/supabase";
+import * as WebBrowser from "expo-web-browser";
+import * as AuthSession from "expo-auth-session";
+
+WebBrowser.maybeCompleteAuthSession();
 
 const LOGO_IMAGE = require("../assets/images/logo.png");
 
@@ -23,15 +30,86 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleSignUp = () => {
-    // TODO: integrate with backend auth
-    navigation.replace("Main");
+  const handleSignUp = async () => {
+    if (!fullName || !email || !password) {
+      Alert.alert("Error", "Semua field harus diisi");
+      return;
+    }
+    if (password.length < 6) {
+      Alert.alert("Error", "Kata sandi minimal 6 karakter");
+      return;
+    }
+    setLoading(true);
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { display_name: fullName } },
+    });
+    if (!error && data.user) {
+      await supabase.from("profiles").upsert({
+        id: data.user.id,
+        display_name: fullName,
+      });
+    }
+    setLoading(false);
+    if (error) {
+      Alert.alert("Pendaftaran Gagal", error.message);
+    } else {
+      Alert.alert("Berhasil", "Akun berhasil dibuat! Silakan login.", [
+        { text: "OK", onPress: () => navigation.navigate("Login") },
+      ]);
+    }
   };
 
-  const handleGoogleSignUp = () => {
-    // TODO: integrate Google OAuth
-    navigation.replace("Main");
+  const handleGoogleSignUp = async () => {
+    try {
+      // 1. Buat URL Redirect yang mengarah kembali ke HP
+      const redirectUrl = AuthSession.makeRedirectUri({ 
+        scheme: "nirsisa",
+        path: "auth-callback" // Opsional, bisa nirsisa:// saja
+      });
+
+      // 2. Minta URL Login dari Supabase
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { 
+          redirectTo: redirectUrl, 
+          skipBrowserRedirect: true 
+        },
+      });
+
+      if (error || !data.url) throw error || new Error("Gagal mendapatkan URL login");
+
+      // 3. Buka browser dan TUNGGU hasilnya (Redirect kembali ke app)
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
+
+      // 4. Jika user berhasil login dan kembali ke aplikasi
+      if (result.type === "success" && result.url) {
+        // Ekstrak token dari URL (URL biasanya mengandung #access_token=...)
+        const urlPart = result.url.split("#")[1];
+        const params = new URLSearchParams(urlPart);
+        
+        const access_token = params.get("access_token");
+        const refresh_token = params.get("refresh_token");
+
+        if (access_token && refresh_token) {
+          // Simpan session ke Supabase Client di Mobile
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token,
+            refresh_token,
+          });
+
+          if (sessionError) throw sessionError;
+          
+          // Pindah ke halaman utama
+          navigation.replace("Main");
+        }
+      }
+    } catch (error: any) {
+      Alert.alert("Google Login Error", error.message);
+    }
   };
 
   return (
@@ -126,9 +204,15 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation }) => {
           </View>
 
           {/* Sign Up Button */}
-          <TouchableOpacity style={styles.primaryButton} onPress={handleSignUp}>
-            <Text style={styles.primaryButtonText}>Daftar</Text>
-            <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+          <TouchableOpacity style={styles.primaryButton} onPress={handleSignUp} disabled={loading}>
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <>
+                <Text style={styles.primaryButtonText}>Daftar</Text>
+                <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+              </>
+            )}
           </TouchableOpacity>
 
           {/* Divider */}

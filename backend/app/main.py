@@ -4,8 +4,9 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List
 
@@ -65,13 +66,37 @@ def create_app() -> FastAPI:
     app.include_router(recipes_router)
     app.include_router(recommend_router)
 
-    # # --- LEGACY ENDPOINT (Disesuaikan ke Modul AI Baru) ---
-    # @app.get("/", tags=["Legacy"])
-    # def read_root():
-    #     return {
-    #         "status": "NirSisa Backend is Online",
-    #         "engine": "Modular AI Engine Active"
-    #     }
+    # --- LEGACY ENDPOINT (Disesuaikan ke Modul AI Baru) ---
+    @app.get("/auth/callback", response_class=HTMLResponse, tags=["Auth"])
+    def auth_callback(request: Request):
+        app_redirect = request.query_params.get("app_redirect", "nirsisa://")
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>NirSisa - Login Berhasil</title></head>
+        <body style="font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#FAFAFA;">
+          <div style="text-align:center;padding:24px;">
+            <h2 style="color:#2B2B2B;">Login Berhasil!</h2>
+            <p style="color:#656C6E;">Mengarahkan ke aplikasi...</p>
+            <a id="open" href="#" style="display:inline-block;margin-top:16px;padding:12px 32px;background:#BB0009;color:#fff;border-radius:24px;text-decoration:none;font-weight:bold;">Buka Aplikasi</a>
+          </div>
+          <script>
+            var hash = window.location.hash;
+            var appUrl = decodeURIComponent("{app_redirect}") + hash;
+            document.getElementById('open').href = appUrl;
+            setTimeout(function() {{ window.location.href = appUrl; }}, 500);
+          </script>
+        </body>
+        </html>
+        """
+        return HTMLResponse(content=html)
+
+    @app.get("/", tags=["Legacy"])
+    def read_root():
+        return {
+            "status": "NirSisa Backend is Online",
+            "engine": "Modular AI Engine Active"
+        }
 
     # @app.post("/recommend", tags=["Legacy"])
     # def recommend_legacy(request: RecommendRequestLegacy):

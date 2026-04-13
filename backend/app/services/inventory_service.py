@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional # Pastikan Optional diimport
+
 
 from app.core.supabase import get_supabase
 from app.services.normalizer import (
@@ -39,6 +40,32 @@ def enrich_inventory_item(item: dict[str, Any]) -> dict[str, Any]:
     item["freshness_status"] = status
     return item
 
+def get_category_id_from_name(name: str) -> Optional[int]:
+    # Mapping dari Label UI (Frontend) ke ID Database (berdasarkan screenshot Anda)
+    mapping = {
+        "sayuran": 1,           # sayur
+        "buah-Buahan": 2,       # buah
+        "daging Sapi": 3,       # daging_sapi
+        "daging Ayam": 4,       # daging_ayam
+        "daging Kambing": 5,    # daging_kambing
+        "ikan": 6,              # ikan_segar
+        "udang": 7,             # udang
+        "telur": 8,             # telur
+        "tahu": 9,              # tahu
+        "tempe": 10,            # tempe
+        "susu & Olahan": 11,    # dairy
+        "bumbu Segar": 12,      # bumbu_segar
+        "bumbu Kering": 13,     # bumbu_kering
+        "produk Jadi": 14,      # bahan_olahan
+        "minyak & Lemak": 15,   # minyak_lemak
+        "tepung": 16,           # tepung_kering
+        "kacang-kacangan": 17,  # kacang_biji
+        "roti & Bakery": 18,    # roti_bakery
+    }
+    if not name: return None
+    # .lower() akan mengubah "Sayuran" atau "SAYURAN" menjadi "sayuran"
+    return mapping.get(name.lower())
+
 
 def prepare_insert_row(
     user_id: str,
@@ -47,10 +74,20 @@ def prepare_insert_row(
     unit: str,
     is_natural: bool,
     expiry_date: date | None,
+    category_name: Optional[str] = None, # <--- TAMBAHKAN PARAMETER INI
 ) -> dict[str, Any]:
-    # Siapkan row untuk di-insert ke inventory_stock dengan normalisasi 
+    
     normalized = normalize_ingredient_name(item_name)
-    category_id = resolve_category_from_shelf_life(normalized)
+    
+    # LOGIKA BARU: 
+    # Jika user memilih kategori di HP, kita cari ID-nya. 
+    # Jika tidak memilih, baru gunakan fungsi pencarian otomatis (AI/Lookup).
+    category_id = None
+    if category_name:
+        category_id = get_category_id_from_name(category_name)
+    
+    if not category_id:
+        category_id = resolve_category_from_shelf_life(normalized)
 
     row: dict[str, Any] = {
         "user_id": user_id,
@@ -64,18 +101,14 @@ def prepare_insert_row(
     if category_id:
         row["category_id"] = category_id
 
-    # Tentukan expiry_date
+    # Logika Expiry tetap sama
     if expiry_date:
         row["expiry_date"] = expiry_date.isoformat()
     elif is_natural:
         estimated = estimate_expiry_date(normalized, is_natural=True)
         if estimated:
             row["expiry_date"] = estimated.isoformat()
-            logger.info(
-                "Auto-estimated expiry untuk '%s' → %s",
-                item_name,
-                estimated.isoformat(),
-            )
+            logger.info("Auto-estimated expiry untuk '%s' → %s", item_name, estimated.isoformat())
 
     return row
 

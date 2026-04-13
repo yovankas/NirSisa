@@ -1,5 +1,6 @@
 import React from "react";
-import { View, StyleSheet, Platform } from "react-native";
+import { View, StyleSheet, Platform, ActivityIndicator } from "react-native";
+import { useAuth } from "../context/AuthContext";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
@@ -7,19 +8,26 @@ import LoginScreen from "../screens/LoginScreen";
 import SignUpScreen from "../screens/SignUpScreen";
 import HomeScreen from "../screens/HomeScreen";
 import StokScreen from "../screens/StokScreen";
-import {
-  ChefAIScreen,
-  RiwayatScreen,
-  ProfilScreen,
-} from "../screens/PlaceholderScreen";
+import ProfilScreen from "../screens/ProfilScreen";
+import RiwayatScreen from "../screens/RiwayatScreen";
+import RecipeRecommendationScreen from "../screens/RecipeRecommendationScreen";
+import RecipeDetailScreen from "../screens/RecipeDetailScreen";
+import NotificationScreen from "../screens/NotificationScreen";
 
 export type RootStackParamList = {
   Login: undefined;
   SignUp: undefined;
-  Main: undefined;
+  Main: { screen?: string } | undefined;
+  Notification: undefined;
+};
+
+export type ChefAIStackParamList = {
+  RecipeRecommendation: undefined;
+  RecipeDetail: { recipeId: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const ChefAIStack = createNativeStackNavigator<ChefAIStackParamList>();
 const Tab = createBottomTabNavigator();
 
 const TAB_ICONS: Record<string, { active: keyof typeof Ionicons.glyphMap; inactive: keyof typeof Ionicons.glyphMap }> = {
@@ -34,6 +42,13 @@ const ChefAITabIcon = ({ focused, size }: { focused: boolean; size: number }) =>
   <View style={styles.chefAIButton}>
     <Ionicons name="sparkles" size={size} color="#FFFFFF" />
   </View>
+);
+
+const ChefAINavigator: React.FC = () => (
+  <ChefAIStack.Navigator screenOptions={{ headerShown: false }}>
+    <ChefAIStack.Screen name="RecipeRecommendation" component={RecipeRecommendationScreen} />
+    <ChefAIStack.Screen name="RecipeDetail" component={RecipeDetailScreen} />
+  </ChefAIStack.Navigator>
 );
 
 const MainTabs: React.FC = () => {
@@ -67,7 +82,7 @@ const MainTabs: React.FC = () => {
       />
       <Tab.Screen
         name="ChefAI"
-        component={ChefAIScreen}
+        component={ChefAINavigator}
         options={{
           tabBarLabel: "CHEF AI",
           tabBarActiveTintColor: "#BB0009",
@@ -88,19 +103,40 @@ const MainTabs: React.FC = () => {
 };
 
 const AppNavigator: React.FC = () => {
+  const { session, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#BB0009" />
+      </View>
+    );
+  }
+
   return (
-    <Stack.Navigator
-      initialRouteName="Login"
-      screenOptions={{ headerShown: false }}
-    >
-      <Stack.Screen name="Login" component={LoginScreen} />
-      <Stack.Screen name="SignUp" component={SignUpScreen} />
-      <Stack.Screen name="Main" component={MainTabs} />
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      {session ? (
+        <>
+          <Stack.Screen name="Main" component={MainTabs} />
+          <Stack.Screen name="Notification" component={NotificationScreen} />
+        </>
+      ) : (
+        <>
+          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="SignUp" component={SignUpScreen} />
+        </>
+      )}
     </Stack.Navigator>
   );
 };
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FAFAFA",
+  },
   tabBar: {
     backgroundColor: "#FFFFFF",
     borderTopWidth: 1,
