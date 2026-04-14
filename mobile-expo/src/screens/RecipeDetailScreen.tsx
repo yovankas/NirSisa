@@ -29,6 +29,18 @@ type Props = NativeStackScreenProps<ChefAIStackParamList, "RecipeDetail">;
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+const STAPLE_INGREDIENTS = [
+  "garam", "gula", "lada", "merica", "air", "minyak", "kecap", 
+  "penyedap", "msg", "masako", "royco", "tauco", "maizena", 
+  "bawang putih", "bawang merah", "saus", "cabe", "cabai", "bawang bombay"
+];
+
+const checkIsStaple = (text: string): boolean => {
+  const normalized = text.toLowerCase();
+  return STAPLE_INGREDIENTS.some(staple => normalized.includes(staple));
+};
+
+
 const parseRawList = (raw: string): string[] => {
   if (!raw) return [];
   let parts = raw.split("--").map((s) => s.trim()).filter(Boolean);
@@ -383,8 +395,23 @@ const RecipeDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     const lines = parseRawList(recipe.ingredients);
 
     return lines.map((text, idx) => {
+
+      const isStaple = checkIsStaple(text);
       const matched = pickBestInventoryMatch(text, inventory);
       const requested = extractRequestedAmount(text);
+
+    if (isStaple) {
+      return {
+        id: `ing-${idx}`,
+        text,
+        matchedItem: null, // Jangan dihubungkan ke stok DB
+        requestedQuantity: requested.quantity,
+        requestedUnit: requested.unit,
+        quantityToUse: null, // Tidak perlu potong stok
+        status: "safe",
+        helperText: "Bahan pendukung (Asumsi Tersedia)",
+      };
+    }
 
       if (!matched) {
         return {

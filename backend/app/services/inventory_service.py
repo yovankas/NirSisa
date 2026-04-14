@@ -16,6 +16,7 @@ from app.services.normalizer import (
     normalize_ingredient_name,
     estimate_expiry_date,
     resolve_category_from_shelf_life,
+    is_staple_ingredient,
 )
 from app.ai.spi import days_until_expiry, calculate_spi, freshness_status
 
@@ -148,8 +149,8 @@ def reconcile_inventory(
     ingredients_used: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """
-    Kurangi stok bahan setelah user konfirmasi selesai masak,
-    dan catat ke consumption_history (parent) + consumption_history_items (children).
+    MEMPERBAIKI: Mengabaikan pengurangan stok untuk bahan dasar (staples)
+    namun tetap mencatatnya di riwayat konsumsi.
     """
     sb = get_supabase()
     updated_items: list[dict] = []
@@ -157,12 +158,26 @@ def reconcile_inventory(
     items_snapshot: list[dict] = []
 
     try:
-        normalized_usages = _aggregate_ingredients_used(ingredients_used)
+        for usage in ingredients_used:
+            item_id = usage.get("item_id")
+            # Jika item_id null, kita coba identifikasi lewat nama
+            ing_name = usage.get("item_name", "Bahan Tanpa Nama")
+            qty_used = float(usage.get("quantity_used", 0))
 
-        for usage in normalized_usages:
-            item_id = usage["item_id"]
-            qty_used = float(usage["quantity_used"])
+            # --- LOGIKA STAPLE INGREDIENTS ---
+            # Jika bahan adalah staple (garam, air, dll) ATAU tidak punya ID stok
+            if is_staple_ingredient(ing_name) or not item_id:
+                logger.info("Skipping deduction for staple/untracked item: %s", ing_name)
+                # Tetap masukkan ke snapshot untuk dicatat di RIWAYAT
+                items_snapshot.append({
+                    "inventory_stock_id": None, # Tidak ada link ke stok
+                    "item_name": ing_name,
+                    "quantity_used": qty_used,
+                    "unit": usage.get("unit", "secukupnya"),
+                })
+                continue 
 
+            # --- LOGIKA BAHAN UTAMA (Update DB) ---
             current = (
                 sb.table("inventory_stock")
                 .select("id, item_name, quantity, unit")
@@ -173,17 +188,11 @@ def reconcile_inventory(
             )
 
             if not current.data:
-                raise ValueError(f"Item {item_id} tidak ditemukan di inventaris user.")
+                # Jika tidak ditemukan di DB, anggap staple/tidak dilacak
+                continue
 
             current_qty = float(current.data["quantity"])
-
-            if qty_used > current_qty:
-                raise ValueError(
-                    f"Stok '{current.data['item_name']}' tidak cukup: "
-                    f"tersisa {current_qty}, diminta {qty_used}"
-                )
-
-            new_qty = current_qty - qty_used
+            new_qty = max(0, current_qty - qty_used)
 
             items_snapshot.append({
                 "inventory_stock_id": item_id,
@@ -193,58 +202,37 @@ def reconcile_inventory(
             })
 
             if new_qty <= 0:
-                sb.table("inventory_stock").delete().eq("id", item_id).eq("user_id", user_id).execute()
+                sb.table("inventory_stock").delete().eq("id", item_id).execute()
                 deleted_items.append(current.data["item_name"])
             else:
-                sb.table("inventory_stock").update({"quantity": new_qty}).eq("id", item_id).eq("user_id", user_id).execute()
-                updated_items.append({
-                    "item_name": current.data["item_name"],
-                    "previous_qty": current_qty,
-                    "new_qty": new_qty,
-                    "unit": current.data["unit"],
-                })
+                sb.table("inventory_stock").update({"quantity": new_qty}).eq("id", item_id).execute()
+                updated_items.append({"item_name": current.data["item_name"], "new_qty": new_qty})
 
-        try:
-            parent_row: dict[str, Any] = {
-                "user_id": user_id,
-                "recipe_title": recipe_title,
-                "cooked_at": datetime.utcnow().isoformat(),
-            }
+        # CATAT KE CONSUMPTION HISTORY (Tetap simpan semua bahan yang dipakai)
+        parent_row = {
+            "user_id": user_id,
+            "recipe_title": recipe_title,
+            "recipe_id": recipe_id,
+            "cooked_at": datetime.utcnow().isoformat(),
+        }
+        parent_result = sb.table("consumption_history").insert(parent_row).execute()
 
-            if recipe_id is not None:
-                parent_row["recipe_id"] = recipe_id
-
-            parent_result = sb.table("consumption_history").insert(parent_row).execute()
-
-            if parent_result.data:
-                consumption_id = parent_result.data[0]["id"]
-
-                children_rows = [
-                    {**snap, "consumption_id": consumption_id}
-                    for snap in items_snapshot
-                ]
-                if children_rows:
-                    sb.table("consumption_history_items").insert(children_rows).execute()
-
-                logger.info(
-                    "Riwayat dicatat: '%s' (%d items) oleh user %s",
-                    recipe_title, len(items_snapshot), user_id
-                )
-        except Exception as log_err:
-            logger.warning("Gagal mencatat riwayat konsumsi: %s", log_err)
+        if parent_result.data:
+            consumption_id = parent_result.data[0]["id"]
+            children_rows = [{**snap, "consumption_id": consumption_id} for snap in items_snapshot]
+            sb.table("consumption_history_items").insert(children_rows).execute()
 
         return {
             "status": "success",
             "recipe_title": recipe_title,
             "items_updated": updated_items,
             "items_removed": deleted_items,
+            "staples_used": [i["item_name"] for i in items_snapshot if i["inventory_stock_id"] is None]
         }
 
-    except ValueError:
-        raise
     except Exception as e:
         logger.error("Reconciliation gagal: %s", e)
-        raise ValueError(f"Reconciliation gagal: {str(e)}")
+        raise ValueError(f"Gagal memproses stok: {str(e)}")
 
 
 # Fetch inventory dengan SPI enrichment (untuk recommend endpoint)

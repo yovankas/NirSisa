@@ -161,6 +161,38 @@ const StokScreen: React.FC = () => {
     }
   };
 
+  const handleDeleteBahan = (item: InventoryItem) => {
+  Alert.alert(
+    "Hapus Bahan",
+    `Apakah Anda yakin ingin menghapus ${capitalizeEachWord(item.item_name)} dari stok?`,
+    [
+      { text: "Batal", style: "cancel" },
+      { 
+        text: "Hapus", 
+        style: "destructive", 
+        onPress: async () => {
+          try {
+            if (!session?.access_token) return;
+            setLoading(true);
+            
+            // Panggil API Delete ke Railway
+            await axios.delete(`${API_URL}/inventory/${item.id}`, {
+              headers: { Authorization: `Bearer ${session.access_token}` }
+            });
+
+            Alert.alert("Berhasil", "Bahan telah dihapus.");
+            fetchInventory(); // Refresh daftar stok
+          } catch (error: any) {
+            console.error("Delete Error:", error.message);
+            Alert.alert("Gagal", "Gagal menghapus bahan.");
+            setLoading(false);
+          }
+        }
+      }
+    ]
+  );
+};
+
   // --- LOGIKA PEMROSESAN DATA (GROUPING) ---
   const groupedInventory = useMemo(() => {
     // 1. Filter pencarian
@@ -281,25 +313,35 @@ const StokScreen: React.FC = () => {
                 </View>
               </View>
 
-              {groupedInventory[categoryName].map((item) => {
-                const statusInfo = getStatusDisplay(item.freshness_status, item.days_remaining);
-                return (
-                  <TouchableOpacity key={item.id} style={styles.stockCard}>
-                    <View style={[styles.stockCardBorder, { backgroundColor: statusInfo.color }]} />
-                    <View style={styles.stockCardContent}>
-                      <View style={styles.stockCardInfo}>
-                        {/* ▼▼▼ FIX: capitalize nama bahan (wortel -> Wortel, bawang merah -> Bawang Merah) ▼▼▼ */}
-                        <Text style={styles.stockItemName}>{capitalizeEachWord(item.item_name)}</Text>
-                        {/* ▲▲▲ */}
-                        <Text style={styles.stockItemQty}>{item.quantity} {item.unit}</Text>
-                      </View>
+            {groupedInventory[categoryName].map((item) => {
+              const statusInfo = getStatusDisplay(item.freshness_status, item.days_remaining);
+              return (
+                <TouchableOpacity key={item.id} style={styles.stockCard} activeOpacity={0.7}>
+                  <View style={[styles.stockCardBorder, { backgroundColor: statusInfo.color }]} />
+                  <View style={styles.stockCardContent}>
+                    <View style={styles.stockCardInfo}>
+                      <Text style={styles.stockItemName}>{capitalizeEachWord(item.item_name)}</Text>
+                      <Text style={styles.stockItemQty}>{item.quantity} {item.unit}</Text>
+                    </View>
+                    
+                    {/* Container untuk Badge dan Tombol Hapus */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                       <View style={[styles.statusBadge, { backgroundColor: statusInfo.color }]}>
                         <Text style={styles.statusBadgeText}>{statusInfo.label}</Text>
                       </View>
+                      
+                      {/* TOMBOL HAPUS BARU */}
+                      <TouchableOpacity 
+                        onPress={() => handleDeleteBahan(item)}
+                        style={{ padding: 4 }}
+                      >
+                        <Ionicons name="trash-outline" size={20} color="#BB0009" />
+                      </TouchableOpacity>
                     </View>
-                  </TouchableOpacity>
-                );
-              })}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
             </View>
           ))
         )}
