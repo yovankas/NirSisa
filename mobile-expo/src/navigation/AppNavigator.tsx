@@ -13,6 +13,9 @@ import RiwayatScreen from "../screens/RiwayatScreen";
 import RecipeRecommendationScreen from "../screens/RecipeRecommendationScreen";
 import RecipeDetailScreen from "../screens/RecipeDetailScreen";
 import NotificationScreen from "../screens/NotificationScreen";
+// ▼▼▼ FIX: type untuk full recipe object yang dikirim antar screen ▼▼▼
+import { RecommendationItem } from "../types/api";
+// ▲▲▲
 
 export type RootStackParamList = {
   Login: undefined;
@@ -21,10 +24,14 @@ export type RootStackParamList = {
   Notification: undefined;
 };
 
+// ▼▼▼ FIX: RecipeDetail sekarang menerima object recipe lengkap, bukan id ▼▼▼
+// Sebelumnya: { recipeId: string } yang merujuk ke dummy data RECIPES.
+// Sekarang: full RecommendationItem dari backend AI, tidak perlu re-fetch.
 export type ChefAIStackParamList = {
   RecipeRecommendation: undefined;
-  RecipeDetail: { recipeId: string };
+  RecipeDetail: { recipe: RecommendationItem };
 };
+// ▲▲▲
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const ChefAIStack = createNativeStackNavigator<ChefAIStackParamList>();

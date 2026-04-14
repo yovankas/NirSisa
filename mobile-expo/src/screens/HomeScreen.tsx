@@ -15,13 +15,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/AppNavigator";
-import { supabase } from "../services/supabase"; // Import client supabase Anda
-import axios from "axios";
+import { supabase } from "../services/supabase";
+// ▼▼▼ FIX: pakai api client terpusat + types + formatter ▼▼▼
+import { api, extractApiError } from "../services/api";
+import { RecommendationItem, RecommendationResponse } from "../types/api";
+import { capitalizeEachWord } from "../utils/formatters";
+// ▲▲▲
 
 const LOGO_IMAGE = require("../assets/images/logo.png");
-
-// URL Backend FastAPI Anda (Gunakan IP Lokal, jangan localhost jika tes di HP asli)
-const API_URL = "https://nirsisa-production.up.railway.app";
 
 interface InventoryItem {
   id: string;
@@ -32,22 +33,14 @@ interface InventoryItem {
   freshness_status: 'fresh' | 'warning' | 'critical';
 }
 
-interface Recipe {
-  index: number;
-  title: string;
-  total_steps: number;
-  total_ingredients: number;
-  loves: number;
-}
-
 const HomeScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  
+
   // States
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState("User");
   const [expiringItems, setExpiringItems] = useState<InventoryItem[]>([]);
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [recipes, setRecipes] = useState<RecommendationItem[]>([]);
   const [totalStock, setTotalStock] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -61,11 +54,11 @@ const HomeScreen: React.FC = () => {
       // 1. Ambil User Auth
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        console.log("LOGGED IN USER ID:", user.id); 
+        console.log("LOGGED IN USER ID:", user.id);
       }
       if (!user) return;
 
-      // 2. Ambil User Profile (Gunakan Promise.all agar lebih cepat)
+      // 2. Ambil User Profile
       const { data: profile } = await supabase
         .from("profiles")
         .select("display_name")
@@ -73,13 +66,13 @@ const HomeScreen: React.FC = () => {
         .single();
       if (profile) setUserName(profile.display_name);
 
-      // 3. Ambil Total Count Stok terlebih dahulu
+      // 3. Ambil Total Count Stok
       const { count } = await supabase
         .from("inventory_stock")
         .select("*", { count: 'exact', head: true })
         .eq("user_id", user.id)
         .gt("quantity", 0);
-      
+
       const currentTotal = count || 0;
       setTotalStock(currentTotal);
 
@@ -104,26 +97,23 @@ const HomeScreen: React.FC = () => {
       setExpiringItems(processedStock);
 
       // 5. Ambil Rekomendasi AI (Hanya jika stok ada)
+      // ▼▼▼ FIX: pakai api client (token auto-injected) ▼▼▼
       if (currentTotal > 0) {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
         try {
-            const res = await axios.get(`${API_URL}/recommend?top_k=2`, {
-              headers: { Authorization: `Bearer ${session.access_token}` }
-            });
-            setRecipes(res.data.recommendations || []);
-          } catch (apiError: any) { // Tambahkan : any di sini
-            console.log("AI Recommendation log:", apiError?.message);
-            setRecipes([]); 
-          }
+          const res = await api.get<RecommendationResponse>("/recommend", {
+            params: { top_k: 2 },
+          });
+          setRecipes(res.data.recommendations || []);
+        } catch (apiError) {
+          console.log("AI Recommendation log:", extractApiError(apiError));
+          setRecipes([]);
         }
       } else {
-        // Pastikan resep kosong jika stok 0
         setRecipes([]);
       }
+      // ▲▲▲
 
     } catch (error: any) {
-      // Tangani error fatal saja (misal masalah koneksi database utama)
       console.error("Fatal Fetch Error:", error);
     } finally {
       setLoading(false);
@@ -139,23 +129,12 @@ const HomeScreen: React.FC = () => {
 
   const getCardColors = (days: number) => {
     if (days <= 2) {
-      return {
-        backgroundColor: "#FEF2F2",
-        borderColor: "#FEE2E2",
-      };
+      return { backgroundColor: "#FEF2F2", borderColor: "#FEE2E2" };
     }
-
     if (days <= 5) {
-      return {
-        backgroundColor: "#FFF8E1",
-        borderColor: "#FDCB52",
-      };
+      return { backgroundColor: "#FFF8E1", borderColor: "#FDCB52" };
     }
-
-    return {
-      backgroundColor: "#DCFCE7",
-      borderColor: "#15803D",
-    };
+    return { backgroundColor: "#DCFCE7", borderColor: "#15803D" };
   };
 
   if (loading) {
@@ -173,13 +152,13 @@ const HomeScreen: React.FC = () => {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl 
-              refreshing={refreshing} 
+            <RefreshControl
+              refreshing={refreshing}
               onRefresh={() => {
                 setRefreshing(true);
                 fetchInitialData();
-              }} 
-              tintColor="#BB0009" 
+              }}
+              tintColor="#BB0009"
             />
           }
         >
@@ -228,7 +207,9 @@ const HomeScreen: React.FC = () => {
                 <Text style={styles.expiryBadgeText}>{badge.label}</Text>
               </View>
               <View style={styles.expiryInfo}>
-                <Text style={styles.expiryName}>{item.item_name}</Text>
+                {/* ▼▼▼ FIX: capitalize nama bahan ▼▼▼ */}
+                <Text style={styles.expiryName}>{capitalizeEachWord(item.item_name)}</Text>
+                {/* ▲▲▲ */}
                 <Text style={styles.expiryQty}>
                   {item.quantity} {item.unit}
                 </Text>
@@ -246,9 +227,15 @@ const HomeScreen: React.FC = () => {
         </View>
 
         {recipes.map((recipe) => (
-          <TouchableOpacity key={recipe.index} style={styles.recipeCard}>
+          <TouchableOpacity
+            key={recipe.index}
+            style={styles.recipeCard}
+            onPress={() => navigation.navigate("Main", { screen: "ChefAI" })}
+          >
             <Text style={styles.recipeTag}>REKOMENDASI UNTUKMU</Text>
-            <Text style={styles.recipeName}>{recipe.title}</Text>
+            {/* ▼▼▼ FIX: capitalize judul resep ▼▼▼ */}
+            <Text style={styles.recipeName}>{capitalizeEachWord(recipe.title)}</Text>
+            {/* ▲▲▲ */}
             <View style={styles.recipeMeta}>
               <View style={styles.recipeMetaItem}>
                 <Ionicons name="list-outline" size={14} color="#656C6E" />

@@ -21,6 +21,9 @@ import { RootStackParamList } from "../navigation/AppNavigator";
 import { supabase } from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
 import axios from "axios";
+// ▼▼▼ FIX DISPLAY: import formatter untuk capitalize each word ▼▼▼
+import { capitalizeEachWord, formatCategoryLabel } from "../utils/formatters";
+// ▲▲▲
 
 const LOGO_IMAGE = require("../assets/images/logo.png");
 const API_URL = "https://nirsisa-production.up.railway.app";
@@ -161,6 +164,8 @@ const StokScreen: React.FC = () => {
   // --- LOGIKA PEMROSESAN DATA (GROUPING) ---
   const groupedInventory = useMemo(() => {
     // 1. Filter pencarian
+    // Catatan: item.item_name di DB sudah lowercase (hasil normalizer),
+    // jadi kita cukup lowercase searchQuery untuk matching yang konsisten.
     const filtered = inventory.filter(item => 
       (item.item_name || "").toLowerCase().includes(searchQuery.toLowerCase())
     );
@@ -266,7 +271,9 @@ const StokScreen: React.FC = () => {
           Object.keys(groupedInventory).map((categoryName) => (
             <View key={categoryName} style={styles.categorySection}>
               <View style={styles.categoryHeader}>
-                <Text style={styles.categoryTitle}>{categoryName}</Text>
+                {/* ▼▼▼ FIX: capitalize kategori (sayur -> Sayur, daging_sapi -> Daging Sapi) ▼▼▼ */}
+                <Text style={styles.categoryTitle}>{formatCategoryLabel(categoryName)}</Text>
+                {/* ▲▲▲ */}
                 <View style={styles.categoryBadge}>
                   <Text style={styles.categoryBadgeText}>
                     {groupedInventory[categoryName].length} Bahan
@@ -281,7 +288,9 @@ const StokScreen: React.FC = () => {
                     <View style={[styles.stockCardBorder, { backgroundColor: statusInfo.color }]} />
                     <View style={styles.stockCardContent}>
                       <View style={styles.stockCardInfo}>
-                        <Text style={styles.stockItemName}>{item.item_name}</Text>
+                        {/* ▼▼▼ FIX: capitalize nama bahan (wortel -> Wortel, bawang merah -> Bawang Merah) ▼▼▼ */}
+                        <Text style={styles.stockItemName}>{capitalizeEachWord(item.item_name)}</Text>
+                        {/* ▲▲▲ */}
                         <Text style={styles.stockItemQty}>{item.quantity} {item.unit}</Text>
                       </View>
                       <View style={[styles.statusBadge, { backgroundColor: statusInfo.color }]}>
