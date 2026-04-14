@@ -171,7 +171,7 @@ def save_local(df: pd.DataFrame, vectorizer, tfidf_matrix):
 
     # backend/app/data/recipe_data.pkl
     data_path = DATA_DIR / "recipe_data.pkl"
-    df.to_pickle(data_path)
+    df.to_pickle(data_path, protocol=4)  # avoid pyarrow dependency
     log.info("  %s (%d KB)", data_path, data_path.stat().st_size // 1024)
 
     # database/artifacts/
