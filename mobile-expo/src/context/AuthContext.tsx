@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { Linking } from "react-native";
 import { Session } from "@supabase/supabase-js";
 import { supabase } from "../services/supabase";
 
@@ -32,7 +33,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setSession(session);
     });
 
-    return () => subscription.unsubscribe();
+    const linkingSub = Linking.addEventListener("url", async ({ url }) => {
+      if (!url) return;
+      const hash = url.split("#")[1] ?? "";
+      const params = new URLSearchParams(hash);
+      const access_token = params.get("access_token");
+      const refresh_token = params.get("refresh_token");
+      if (access_token && refresh_token) {
+        await supabase.auth.setSession({ access_token, refresh_token });
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+      linkingSub.remove();
+    };
   }, []);
 
   const signOut = async () => {

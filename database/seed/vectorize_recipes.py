@@ -1,24 +1,28 @@
 """
-TF-IDF Vectorization Pipeline
+TF-IDF Vectorization Pipeline v2
+=================================
+Reads cleaned CSV (v2), builds TF-IDF model, saves artifacts locally
+and syncs to Supabase.
+
+Data source: Indonesian_Food_Recipes_Cleaned_v2.csv (local)
+Model version: v2.0
 
 Usage: python vectorize_recipes.py
 """
 
 import os
 import sys
-import re
 import io
 import json
 import time
+import logging
+import pickle
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import joblib
-from scipy import sparse
 from sklearn.feature_extraction.text import TfidfVectorizer
-from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
-from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 
 try:
     from supabase import create_client, Client
@@ -27,189 +31,186 @@ except ImportError:
     print("Install dependencies: pip install supabase python-dotenv")
     sys.exit(1)
 
+# ─── Config ──────────────────────────────────────────────────────────────────
+
+MODEL_VERSION = "v2.0"
 TFIDF_MAX_FEATURES = 5000
 TFIDF_NGRAM_RANGE = (1, 2)
 TFIDF_SUBLINEAR_TF = True
-MODEL_VERSION = "v1.1"
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+log = logging.getLogger(__name__)
 
+# ─── Paths ───────────────────────────────────────────────────────────────────
+
+_SEED_DIR = Path(__file__).resolve().parent           # database/seed/
+_DB_DIR = _SEED_DIR.parent                             # database/
+_ROOT_DIR = _DB_DIR.parent                             # NirSisa/
+_EDA_DIR = _ROOT_DIR / "EDA Dataset"
+
+CSV_PATH = _EDA_DIR / "Indonesian_Food_Recipes_Cleaned_v2.csv"
+ARTIFACT_DIR = _DB_DIR / "artifacts"
+ML_MODEL_DIR = _ROOT_DIR / "backend" / "app" / "ml_models"
+DATA_DIR = _ROOT_DIR / "backend" / "app" / "data"
+
+ARTIFACT_DIR.mkdir(exist_ok=True)
+ML_MODEL_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True)
+
+# ─── Supabase ────────────────────────────────────────────────────────────────
+
+load_dotenv(_DB_DIR / ".env")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "artifacts"
-OUTPUT_DIR.mkdir(exist_ok=True)
 
 
 def get_supabase() -> Client:
     if not SUPABASE_URL or not SUPABASE_KEY:
-        print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in database/.env")
+        log.error("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in database/.env")
         sys.exit(1)
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-print("Initializing Sastrawi stemmer & stopword remover...")
-_stemmer = StemmerFactory().create_stemmer()
-_stopword_remover_factory = StopWordRemoverFactory()
-_stopwords = set(_stopword_remover_factory.get_stop_words())
+# ─── Custom tokenizer ───────────────────────────────────────────────────────
 
-_extra_stopwords = {
-    'secukupnya', 'sesuai', 'selera', 'sdm', 'sdt', 'sendok', 'makan',
-    'teh', 'buah', 'butir', 'lembar', 'batang', 'siung', 'gram', 'kg',
-    'ml', 'liter', 'potong', 'iris', 'cincang', 'halus', 'kasar',
-    'besar', 'kecil', 'sedang', 'secukup', 'sedikit', 'banyak',
-    'pack', 'bungkus', 'kaleng', 'cup', 'ons', 'papan',
-}
-_stopwords.update(_extra_stopwords)
-
-
-def preprocess_ingredient(ingredient: str) -> str:
-    ingredient = ingredient.lower().strip()
-    ingredient = re.sub(r'[^a-z\s]', ' ', ingredient)
-    ingredient = re.sub(r'\s+', ' ', ingredient).strip()
-
-    if not ingredient:
-        return ""
-
-    words = ingredient.split()
-    words = [w for w in words if w not in _stopwords and len(w) > 1]
-    words = [_stemmer.stem(w) for w in words]
-    words = [w for w in words if w]
-
-    if not words:
-        return ""
-
-    return '_'.join(words)
+def comma_tokenizer(text: str) -> list[str]:
+    """Split ingredients by comma, strip whitespace, join multi-word as compound token."""
+    tokens = []
+    for part in text.split(","):
+        token = part.strip()
+        if token:
+            # Join multi-word ingredients with underscore for TF-IDF
+            # "bawang putih" → "bawang_putih"
+            token = "_".join(token.split())
+            tokens.append(token)
+    return tokens
 
 
-def preprocess_text(text: str) -> str:
-    if not text or not isinstance(text, str):
-        return ""
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 1: Load CSV
+# ═══════════════════════════════════════════════════════════════════════════════
 
-    raw_ingredients = text.split(',')
+def load_csv() -> pd.DataFrame:
+    log.info("STEP 1: Loading CSV from %s", CSV_PATH)
 
-    processed = []
-    seen = set()
-    for ing in raw_ingredients:
-        token = preprocess_ingredient(ing)
-        if token and token not in seen:
-            seen.add(token)
-            processed.append(token)
+    if not CSV_PATH.exists():
+        log.error("CSV not found: %s", CSV_PATH)
+        log.error("Run clean_ingredients.py first to generate the cleaned CSV.")
+        sys.exit(1)
 
-    return ' '.join(processed)
+    df = pd.read_csv(CSV_PATH, encoding="utf-8")
+    log.info("  Loaded %d rows", len(df))
 
+    # Validate
+    if "Ingredients Cleaned" not in df.columns:
+        log.error("Column 'Ingredients Cleaned' not found in CSV")
+        sys.exit(1)
 
-def fetch_recipes(supabase: Client) -> pd.DataFrame:
-    print("Fetching recipes from Supabase...")
-    all_rows = []
-    batch_size = 1000
-    offset = 0
+    # Ensure non-null strings
+    df["Ingredients Cleaned"] = df["Ingredients Cleaned"].fillna("").astype(str)
 
-    while True:
-        result = (
-            supabase.table("recipes")
-            .select("id, ingredients_cleaned")
-            .range(offset, offset + batch_size - 1)
-            .execute()
-        )
-        rows = result.data
-        if not rows:
-            break
-        all_rows.extend(rows)
-        offset += batch_size
-        print(f"  Fetched {len(all_rows)} recipes...")
+    empty_count = (df["Ingredients Cleaned"].str.strip() == "").sum()
+    if empty_count > 0:
+        log.warning("  %d rows have empty Ingredients Cleaned", empty_count)
 
-    df = pd.DataFrame(all_rows)
-    print(f"  Total: {len(df)} recipes")
+    log.info("  Columns: %s", list(df.columns))
+    log.info("  Sample: %s", df["Ingredients Cleaned"].iloc[0][:80])
+
     return df
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 2: Build TF-IDF
+# ═══════════════════════════════════════════════════════════════════════════════
+
 def build_tfidf(df: pd.DataFrame):
-    print("\nPreprocessing ingredients text...")
-    start = time.time()
+    log.info("STEP 2: Building TF-IDF model")
+    log.info("  max_features=%d, ngram_range=%s, sublinear_tf=%s",
+             TFIDF_MAX_FEATURES, TFIDF_NGRAM_RANGE, TFIDF_SUBLINEAR_TF)
 
-    df["ingredients_processed"] = df["ingredients_cleaned"].apply(preprocess_text)
-
-    elapsed = time.time() - start
-    print(f"  Preprocessing done in {elapsed:.1f}s")
-
-    print("\n  Sample preprocessing:")
-    for i in range(min(3, len(df))):
-        original = df["ingredients_cleaned"].iloc[i][:80]
-        processed = df["ingredients_processed"].iloc[i][:80]
-        print(f"    Original:  {original}...")
-        print(f"    Processed: {processed}...")
-        print()
-
-    empty_count = (df["ingredients_processed"].str.strip() == "").sum()
-    if empty_count > 0:
-        print(f"  WARNING: {empty_count} recipes have empty ingredients after preprocessing")
-        df.loc[df["ingredients_processed"].str.strip() == "", "ingredients_processed"] = "unknown"
-
-    print("Fitting TF-IDF vectorizer...")
-    print(f"  max_features={TFIDF_MAX_FEATURES}")
-    print(f"  ngram_range={TFIDF_NGRAM_RANGE}")
-    print(f"  sublinear_tf={TFIDF_SUBLINEAR_TF}")
+    corpus = df["Ingredients Cleaned"].tolist()
 
     vectorizer = TfidfVectorizer(
+        tokenizer=comma_tokenizer,
+        lowercase=True,
+        token_pattern=None,
         max_features=TFIDF_MAX_FEATURES,
         ngram_range=TFIDF_NGRAM_RANGE,
         sublinear_tf=TFIDF_SUBLINEAR_TF,
     )
 
-    start = time.time()
-    tfidf_matrix = vectorizer.fit_transform(df["ingredients_processed"])
-    elapsed = time.time() - start
+    t0 = time.perf_counter()
+    tfidf_matrix = vectorizer.fit_transform(corpus)
+    elapsed = time.perf_counter() - t0
 
-    print(f"  TF-IDF matrix shape: {tfidf_matrix.shape}")
-    print(f"  Vocabulary size: {len(vectorizer.vocabulary_)}")
-    print(f"  Fitting done in {elapsed:.1f}s")
-    print(f"  Matrix density: {tfidf_matrix.nnz / (tfidf_matrix.shape[0] * tfidf_matrix.shape[1]) * 100:.2f}%")
+    log.info("  Matrix shape: %s", tfidf_matrix.shape)
+    log.info("  Vocabulary size: %d", len(vectorizer.vocabulary_))
+    log.info("  Density: %.2f%%", tfidf_matrix.nnz / (tfidf_matrix.shape[0] * tfidf_matrix.shape[1]) * 100)
+    log.info("  Built in %.1fs", elapsed)
 
+    # Top features
     feature_names = vectorizer.get_feature_names_out()
     mean_tfidf = np.array(tfidf_matrix.mean(axis=0)).flatten()
-    top_indices = mean_tfidf.argsort()[-20:][::-1]
-    print("\n  Top 20 TF-IDF features (by mean score):")
-    for idx in top_indices:
-        print(f"    {feature_names[idx]}: {mean_tfidf[idx]:.4f}")
+    top_idx = mean_tfidf.argsort()[-20:][::-1]
+    log.info("  Top 20 TF-IDF features:")
+    for idx in top_idx:
+        log.info("    %s: %.4f", feature_names[idx], mean_tfidf[idx])
 
-    recipe_ids = df["id"].tolist()
-    return vectorizer, tfidf_matrix, recipe_ids
-
-
-def save_local(vectorizer, tfidf_matrix, recipe_ids):
-    print("\nSaving local artifacts...")
-
-    vectorizer_path = OUTPUT_DIR / "tfidf_vectorizer.joblib"
-    matrix_path = OUTPUT_DIR / "tfidf_matrix.joblib"
-    ids_path = OUTPUT_DIR / "recipe_ids.json"
-
-    joblib.dump(vectorizer, vectorizer_path)
-    joblib.dump(tfidf_matrix, matrix_path)
-    with open(ids_path, "w") as f:
-        json.dump(recipe_ids, f)
-
-    print(f"  Vectorizer: {vectorizer_path} ({vectorizer_path.stat().st_size / 1024:.0f} KB)")
-    print(f"  Matrix:     {matrix_path} ({matrix_path.stat().st_size / 1024:.0f} KB)")
-    print(f"  Recipe IDs: {ids_path}")
+    return vectorizer, tfidf_matrix
 
 
-def save_to_supabase(supabase: Client, vectorizer, tfidf_matrix, recipe_ids):
-    print("\nSaving to Supabase (recipe_tfidf_cache)...")
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 3: Save artifacts locally
+# ═══════════════════════════════════════════════════════════════════════════════
 
-    vec_buffer = io.BytesIO()
-    joblib.dump(vectorizer, vec_buffer)
-    vec_bytes = vec_buffer.getvalue()
+def save_local(df: pd.DataFrame, vectorizer, tfidf_matrix):
+    log.info("STEP 3: Saving local artifacts")
 
-    mat_buffer = io.BytesIO()
-    joblib.dump(tfidf_matrix, mat_buffer)
-    mat_bytes = mat_buffer.getvalue()
+    # backend/app/ml_models/
+    vec_path = ML_MODEL_DIR / "tfidf_vectorizer.pkl"
+    mat_path = ML_MODEL_DIR / "recipe_matrix.pkl"
+    joblib.dump(vectorizer, vec_path)
+    joblib.dump(tfidf_matrix, mat_path)
+    log.info("  %s (%d KB)", vec_path, vec_path.stat().st_size // 1024)
+    log.info("  %s (%d KB)", mat_path, mat_path.stat().st_size // 1024)
 
-    print(f"  Vectorizer blob: {len(vec_bytes) / 1024:.0f} KB")
-    print(f"  Matrix blob: {len(mat_bytes) / 1024:.0f} KB")
+    # backend/app/data/recipe_data.pkl
+    data_path = DATA_DIR / "recipe_data.pkl"
+    df.to_pickle(data_path)
+    log.info("  %s (%d KB)", data_path, data_path.stat().st_size // 1024)
+
+    # database/artifacts/
+    joblib.dump(vectorizer, ARTIFACT_DIR / "tfidf_vectorizer.joblib")
+    joblib.dump(tfidf_matrix, ARTIFACT_DIR / "tfidf_matrix.joblib")
+    with open(ARTIFACT_DIR / "recipe_ids.json", "w") as f:
+        # Use index as ID since CSV doesn't have Supabase IDs
+        json.dump(list(range(len(df))), f)
+    log.info("  database/artifacts/ updated")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 4: Sync to Supabase
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def sync_tfidf_cache(supabase: Client, vectorizer, tfidf_matrix, df: pd.DataFrame):
+    """Step 4A: Upload model to recipe_tfidf_cache"""
+    log.info("STEP 4A: Uploading TF-IDF model to Supabase recipe_tfidf_cache")
+
+    vec_buf = io.BytesIO()
+    joblib.dump(vectorizer, vec_buf)
+    vec_bytes = vec_buf.getvalue()
+
+    mat_buf = io.BytesIO()
+    joblib.dump(tfidf_matrix, mat_buf)
+    mat_bytes = mat_buf.getvalue()
+
+    log.info("  Vectorizer blob: %d KB", len(vec_bytes) // 1024)
+    log.info("  Matrix blob: %d KB", len(mat_bytes) // 1024)
 
     vec_hex = "\\x" + vec_bytes.hex()
     mat_hex = "\\x" + mat_bytes.hex()
+
+    recipe_ids = list(range(len(df)))
 
     supabase.table("recipe_tfidf_cache").upsert(
         {
@@ -221,22 +222,141 @@ def save_to_supabase(supabase: Client, vectorizer, tfidf_matrix, recipe_ids):
         on_conflict="version",
     ).execute()
 
-    print(f"  Saved as version '{MODEL_VERSION}'")
+    log.info("  Uploaded as version '%s'", MODEL_VERSION)
 
+
+def sync_recipes_table(supabase: Client, df: pd.DataFrame):
+    """Step 4B: Update ingredients_cleaned in recipes table"""
+    log.info("STEP 4B: Updating recipes.ingredients_cleaned in Supabase")
+
+    # First check how many recipes exist in Supabase
+    count_result = supabase.table("recipes").select("id", count="exact").execute()
+    db_count = count_result.count if hasattr(count_result, 'count') else len(count_result.data)
+    csv_count = len(df)
+
+    log.info("  Supabase recipes: %d, CSV rows: %d", db_count, csv_count)
+
+    if db_count != csv_count:
+        log.warning("=" * 60)
+        log.warning("MANUAL ACTION REQUIRED:")
+        log.warning("  Row count mismatch: Supabase=%d, CSV=%d", db_count, csv_count)
+        log.warning("  Cannot safely update ingredients_cleaned without matching rows.")
+        log.warning("")
+        log.warning("  Options:")
+        log.warning("  1. Re-seed recipes from CSV v2 (truncate + re-insert)")
+        log.warning("  2. Match by title (risky if titles changed)")
+        log.warning("")
+        log.warning("  To re-seed, run in Supabase SQL Editor:")
+        log.warning("    TRUNCATE TABLE recipes RESTART IDENTITY CASCADE;")
+        log.warning("  Then run: python seed_recipes.py (with CSV v2 path)")
+        log.warning("=" * 60)
+        log.warning("  Skipping recipes table update for safety.")
+        return False
+
+    # Fetch all recipe IDs in order
+    log.info("  Fetching recipe IDs from Supabase...")
+    all_ids = []
+    batch_size = 1000
+    offset = 0
+    while True:
+        result = (
+            supabase.table("recipes")
+            .select("id")
+            .order("id")
+            .range(offset, offset + batch_size - 1)
+            .execute()
+        )
+        if not result.data:
+            break
+        all_ids.extend([r["id"] for r in result.data])
+        offset += batch_size
+
+    if len(all_ids) != csv_count:
+        log.error("  ID fetch mismatch: got %d, expected %d", len(all_ids), csv_count)
+        return False
+
+    # Batch update
+    log.info("  Updating %d rows in batches...", csv_count)
+    batch_size = 500
+    updated = 0
+    for start in range(0, csv_count, batch_size):
+        end = min(start + batch_size, csv_count)
+        for idx in range(start, end):
+            recipe_id = all_ids[idx]
+            new_cleaned = df["Ingredients Cleaned"].iloc[idx]
+            supabase.table("recipes").update(
+                {"ingredients_cleaned": new_cleaned}
+            ).eq("id", recipe_id).execute()
+            updated += 1
+
+        log.info("  Updated %d / %d rows", updated, csv_count)
+
+    log.info("  recipes.ingredients_cleaned sync complete")
+    return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 6: Validation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def validate(df: pd.DataFrame, tfidf_matrix):
+    log.info("STEP 6: Validation")
+
+    csv_rows = len(df)
+    matrix_rows = tfidf_matrix.shape[0]
+
+    log.info("  CSV rows:    %d", csv_rows)
+    log.info("  Matrix rows: %d", matrix_rows)
+
+    if csv_rows != matrix_rows:
+        log.error("  MISMATCH: CSV (%d) != Matrix (%d)", csv_rows, matrix_rows)
+        return False
+
+    # Check for empty vectors
+    row_sums = np.array(tfidf_matrix.sum(axis=1)).flatten()
+    empty_vectors = (row_sums == 0).sum()
+    if empty_vectors > 0:
+        log.warning("  %d recipes have empty TF-IDF vectors", empty_vectors)
+
+    # Check vocabulary
+    log.info("  Vocabulary non-empty: %s", tfidf_matrix.shape[1] > 0)
+    log.info("  No NaN in matrix: %s", not np.isnan(tfidf_matrix.data).any())
+
+    log.info("  Validation PASSED")
+    return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Main
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
     print("=" * 60)
-    print("NirSisa TF-IDF Vectorization Pipeline")
+    print(f"NirSisa TF-IDF Vectorization Pipeline {MODEL_VERSION}")
     print("=" * 60)
-    print()
 
+    # Step 1
+    df = load_csv()
+
+    # Step 2
+    vectorizer, tfidf_matrix = build_tfidf(df)
+
+    # Step 3
+    save_local(df, vectorizer, tfidf_matrix)
+
+    # Step 6 (validate before Supabase sync)
+    if not validate(df, tfidf_matrix):
+        log.error("Validation failed. Aborting Supabase sync.")
+        sys.exit(1)
+
+    # Step 4
     supabase = get_supabase()
-    df = fetch_recipes(supabase)
-    vectorizer, tfidf_matrix, recipe_ids = build_tfidf(df)
-    save_local(vectorizer, tfidf_matrix, recipe_ids)
-    save_to_supabase(supabase, vectorizer, tfidf_matrix, recipe_ids)
+    sync_tfidf_cache(supabase, vectorizer, tfidf_matrix, df)
+    sync_recipes_table(supabase, df)
 
-    print("\nDone!")
+    print("\n" + "=" * 60)
+    print("Pipeline complete!")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

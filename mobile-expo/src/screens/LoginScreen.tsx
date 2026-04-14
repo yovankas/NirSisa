@@ -45,7 +45,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
   };
 
   const handleGoogleLogin = async () => {
-    const redirectUrl = AuthSession.makeRedirectUri({ scheme: "nirsisa" });
+    const expUrl = AuthSession.makeRedirectUri({ scheme: "nirsisa" });
+    const redirectUrl = `https://nirsisa-production.up.railway.app/auth/callback?app_redirect=${encodeURIComponent(expUrl)}`;
 
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",

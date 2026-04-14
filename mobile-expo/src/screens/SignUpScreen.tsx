@@ -66,10 +66,8 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation }) => {
   const handleGoogleSignUp = async () => {
     try {
       // 1. Buat URL Redirect yang mengarah kembali ke HP
-      const redirectUrl = AuthSession.makeRedirectUri({ 
-        scheme: "nirsisa",
-        path: "auth-callback" // Opsional, bisa nirsisa:// saja
-      });
+      const expUrl = AuthSession.makeRedirectUri({ scheme: "nirsisa" });
+      const redirectUrl = `https://nirsisa-production.up.railway.app/auth/callback?app_redirect=${encodeURIComponent(expUrl)}`;
 
       // 2. Minta URL Login dari Supabase
       const { data, error } = await supabase.auth.signInWithOAuth({

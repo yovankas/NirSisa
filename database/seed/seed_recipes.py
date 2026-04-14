@@ -21,7 +21,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in database/.env")
     sys.exit(1)
 
-CSV_PATH = Path(__file__).resolve().parent.parent.parent / "EDA Dataset" / "Indonesian_Food_Recipes_Cleaned.csv"
+CSV_PATH = Path(__file__).resolve().parent.parent.parent / "EDA Dataset" / "Indonesian_Food_Recipes_Cleaned_v2.csv"
 
 BATCH_SIZE = 500
 
