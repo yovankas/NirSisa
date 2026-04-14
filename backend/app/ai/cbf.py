@@ -14,6 +14,17 @@ from scipy.sparse import spmatrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+
+def comma_tokenizer(text: str) -> list[str]:
+    """Custom tokenizer matching vectorize_recipes.py — required to deserialize TF-IDF pkl."""
+    tokens = []
+    for part in text.split(","):
+        token = part.strip()
+        if token:
+            token = "_".join(token.split())
+            tokens.append(token)
+    return tokens
+
 logger = logging.getLogger(__name__)
 
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
