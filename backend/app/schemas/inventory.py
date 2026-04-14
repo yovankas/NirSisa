@@ -84,3 +84,4 @@ class ReconciliationResponse(BaseModel):
     recipe_title: str
     items_updated: List[dict] = []
     items_removed: List[str] = []
+    skipped_items: List[str] = []

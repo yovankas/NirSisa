@@ -155,6 +155,7 @@ def reconcile_inventory(
     sb = get_supabase()
     updated_items: list[dict] = []
     deleted_items: list[str] = []
+    skipped_items: list[str] = []
     items_snapshot: list[dict] = []
 
     try:
@@ -188,7 +189,7 @@ def reconcile_inventory(
             )
 
             if not current.data:
-                # Jika tidak ditemukan di DB, anggap staple/tidak dilacak
+                skipped_items.append(ing_name)
                 continue
 
             current_qty = float(current.data["quantity"])
@@ -227,7 +228,7 @@ def reconcile_inventory(
             "recipe_title": recipe_title,
             "items_updated": updated_items,
             "items_removed": deleted_items,
-            "staples_used": [i["item_name"] for i in items_snapshot if i["inventory_stock_id"] is None]
+            "skipped_items": skipped_items,
         }
 
     except Exception as e:

@@ -4,112 +4,254 @@ import re
 import logging
 from datetime import date, timedelta
 from difflib import get_close_matches
-from typing import Any
 
 from app.core.supabase import get_supabase
-from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 
 logger = logging.getLogger(__name__)
 
-# Inisialisasi Stemmer
-_factory = StemmerFactory()
-_stemmer = _factory.create_stemmer()
-
-# ---------------------------------------------------------------------------
-# Konfigurasi Kamus
-# ---------------------------------------------------------------------------
-
-# Bahan dasar yang diasumsikan selalu ada di dapur (Staples)
-# Sistem tidak akan memberikan tanda 'Error' jika bahan ini tidak ada di stok
-STAPLE_INGREDIENTS = {
-    "garam", "gula", "lada", "merica", "air", "minyak", "minyak goreng", 
-    "kecap", "kecap manis", "kecap asin", "penyedap", "msg", 
-    "masako", "royco", "tauco", "maizena", "bawang putih", 
-    "bawang merah", "saus tiram", "saus sambal", "saus tomat", "bawang bombay"
-}
+# ═══════════════════════════════════════════════════════════════════════════════
+# ALIAS MAP — synced with EDA Dataset/clean_ingredients.py
+# ═══════════════════════════════════════════════════════════════════════════════
 
 _ALIAS_MAP: dict[str, str] = {
+    # chilli
+    "cabe rawit merah": "cabai rawit",
+    "cabe merah keriting": "cabai merah keriting",
+    "cabai merah keriting": "cabai merah keriting",
+    "cabai keriting": "cabai merah keriting",
+    "cabe merah": "cabai merah",
+    "cabe rawit": "cabai rawit",
+    "cabe hijau": "cabai hijau",
+    "cabe": "cabai",
+    "lombok merah": "cabai merah",
+    "lombok": "cabai",
+    "rawit": "cabai rawit",
+    "cabai setan": "cabai rawit",
+    # egg
+    "telor ayam": "telur ayam",
+    "telor bebek": "telur bebek",
+    "telor puyuh": "telur puyuh",
+    "telor": "telur",
+    "putih telor": "putih telur",
+    "kuning telor": "kuning telur",
+    # spices
+    "laos": "lengkuas",
+    "sereh": "serai",
+    "sere": "serai",
+    "jahe merah": "jahe",
+    "merica": "lada",
+    "merica bubuk": "lada bubuk",
+    "lada hitam": "lada hitam",
+    # onion
     "baput": "bawang putih",
     "bamer": "bawang merah",
     "bawmer": "bawang merah",
     "bawput": "bawang putih",
+    "brambang": "bawang merah",
+    "bawang bombai": "bawang bombay",
+    "bawang bombay": "bawang bombay",
+    "bawang p": "bawang putih",
     "bombay": "bawang bombay",
-    "cabe": "cabai",
-    "telor": "telur",
-    "sawi hijau": "sawi",
-    "sawi putih": "sawi",
+    # vegetables
+    "pete": "petai",
+    "touge": "tauge",
+    "toge": "tauge",
+    "daun bawang": "daun bawang",
+    # coconut
+    "santen": "santan",
+    "santan kental": "santan",
+    "santan encer": "santan",
+    "kelapa parut": "kelapa",
+    # leaves
+    "daun jeruk purut": "daun jeruk",
+    "daun jeruk wangi": "daun jeruk",
+    "jeruk purut": "daun jeruk",
+    "daun salm": "daun salam",
+    # sugar
+    "gula jawa": "gula merah",
+    "gula aren": "gula merah",
+    "gula merah": "gula merah",
+    # sauce
+    "saos sambal": "saus sambal",
+    "saos tomat": "saus tomat",
+    "saos tiram": "saus tiram",
+    "saos teriyaki": "saus teriyaki",
     "saos": "saus",
+    # flour
     "tapioka": "tepung tapioka",
     "maizena": "tepung maizena",
+    "terigu": "tepung terigu",
+    # oil
     "minyak": "minyak goreng",
-    "lada": "lada bubuk",
-    "merica": "lada bubuk",
-    "cabe merah": "cabai merah",
-    "cabe rawit": "cabai rawit",
-    "cabe hijau": "cabai hijau",
-    "kacang polong": "kacang polong",
-    "kcg": "kacang",
-    "kcg polng": "kacang polong",
-    "kcg polong": "kacang polong",
-
+    # misc
+    "penyedap rasa": "penyedap",
+    "vetsin": "penyedap",
+    "micin": "penyedap",
+    "msg": "penyedap",
+    "masako": "penyedap",
+    "royco": "penyedap",
 }
 
-_shelf_life_cache: dict[str, int] | None = None
+# Abbreviation expansion (user input shorthand)
+_ABBREV_MAP: dict[str, str] = {
+    "bwg": "bawang",
+    "bwng": "bawang",
+    "russ": "ruas",
+    "slera": "selera",
+    "sckpnya": "secukupnya",
+    "scukupnya": "secukupnya",
+}
 
-# ---------------------------------------------------------------------------
-# Fungsi Helper & Logika Utama
-# ---------------------------------------------------------------------------
+# Staple ingredients — assumed always available
+STAPLE_INGREDIENTS: set[str] = {
+    "garam", "gula", "gula pasir", "lada", "lada bubuk", "air",
+    "minyak goreng", "kecap manis", "kecap asin", "penyedap",
+    "bawang putih", "bawang merah", "saus tiram", "saus sambal",
+    "saus tomat", "bawang bombay",
+}
+
+# Shelf-life cache
+_shelf_life_cache: dict[str, int] | None = None
+_shelf_life_full_cache: list[dict] | None = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEXT CLEANING
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def _clean_text(text: str) -> str:
-    """Pembersihan teks mendalam dengan Stemming."""
     text = text.lower().strip()
     text = re.sub(r"[^a-z\s]", " ", text)
-    # Stemming untuk menstandarkan kata (misal: 'bawangan' -> 'bawang')
-    text = _stemmer.stem(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def is_staple_ingredient(name: str) -> bool:
-    """
-    Mengecek apakah suatu bahan termasuk bahan pendukung dasar (staple).
-    Akan digunakan oleh service lain untuk memberikan status 'Tersedia' otomatis.
-    """
-    cleaned = _clean_text(name)
-    # Cek apakah ada kata kunci staple di dalam nama bahan
-    # Contoh: "1 sdt garam" mengandung "garam" -> True
-    return any(staple in cleaned for staple in STAPLE_INGREDIENTS)
 
 def normalize_ingredient_name(raw_name: str) -> str:
-    """Normalisasi nama bahan dengan proteksi over-matching."""
     cleaned = _clean_text(raw_name)
-
     if not cleaned:
         return ""
 
-    # 1. Cek Exact Match di Alias Map
-    if cleaned in _ALIAS_MAP:
-        return _ALIAS_MAP[cleaned]
+    # Expand abbreviations
+    for abbr in sorted(_ABBREV_MAP.keys(), key=len, reverse=True):
+        if abbr in cleaned:
+            cleaned = cleaned.replace(abbr, _ABBREV_MAP[abbr])
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
-    # 2. Bangun Kamus Referensi
-    shelf_life_db = _load_shelf_life_cache()
-    master_dictionary = list(set(
-        list(shelf_life_db.keys()) + 
-        list(_get_default_shelf_life().keys()) + 
-        list(_ALIAS_MAP.keys())
-    ))
+    # Exact alias match (longest first)
+    for alias in sorted(_ALIAS_MAP.keys(), key=len, reverse=True):
+        if alias == cleaned:
+            return _ALIAS_MAP[alias]
 
-    # 3. Fuzzy Match dengan Threshold Ketat (0.8)
-    # Gunakan 0.8 agar "sawi" tidak nekat jadi "cabai"
-    matches = get_close_matches(cleaned, master_dictionary, n=1, cutoff=0.8)
+    # Substring alias match for compound names
+    for alias in sorted(_ALIAS_MAP.keys(), key=len, reverse=True):
+        if re.search(r"\b" + re.escape(alias) + r"\b", cleaned):
+            cleaned = re.sub(r"\b" + re.escape(alias) + r"\b", _ALIAS_MAP[alias], cleaned)
+            break
 
+    # Fuzzy match against shelf_life_reference + alias keys
+    shelf_life = _load_shelf_life_cache()
+    all_known = list(set(list(shelf_life.keys()) + list(_ALIAS_MAP.values())))
+    matches = get_close_matches(cleaned, all_known, n=1, cutoff=0.8)
     if matches:
-        matched_word = matches[0]
-        # Proteksi Noun: Jika kata pertama berbeda jauh, jangan dipaksakan
-        # Mencegah sawi hijau -> cabai hijau
-        if cleaned.split()[0][0] == matched_word.split()[0][0]:
-            return _ALIAS_MAP.get(matched_word, matched_word)
+        matched = matches[0]
+        if cleaned.split()[0][0] == matched.split()[0][0]:
+            return matched
 
     return cleaned
+
+
+def is_staple_ingredient(name: str) -> bool:
+    normalized = normalize_ingredient_name(name)
+    return normalized in STAPLE_INGREDIENTS
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SHELF-LIFE & UNIT SUGGESTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _load_shelf_life_cache() -> dict[str, int]:
+    global _shelf_life_cache
+    if _shelf_life_cache is not None:
+        return _shelf_life_cache
+    try:
+        sb = get_supabase()
+        result = sb.table("shelf_life_reference").select("ingredient_name, shelf_life_days").execute()
+        _shelf_life_cache = {
+            row["ingredient_name"].lower(): row["shelf_life_days"]
+            for row in result.data
+        }
+    except Exception as e:
+        logger.warning("Gagal load shelf-life cache: %s", e)
+        _shelf_life_cache = _get_default_shelf_life()
+    return _shelf_life_cache
+
+
+def _load_shelf_life_full() -> list[dict]:
+    global _shelf_life_full_cache
+    if _shelf_life_full_cache is not None:
+        return _shelf_life_full_cache
+    try:
+        sb = get_supabase()
+        result = (
+            sb.table("shelf_life_reference")
+            .select("ingredient_name, shelf_life_days, default_unit, category_id")
+            .execute()
+        )
+        _shelf_life_full_cache = result.data or []
+    except Exception as e:
+        logger.warning("Gagal load shelf-life full: %s", e)
+        _shelf_life_full_cache = []
+    return _shelf_life_full_cache
+
+
+def suggest_unit(item_name: str) -> dict:
+    normalized = normalize_ingredient_name(item_name)
+    shelf_data = _load_shelf_life_full()
+
+    # Exact match
+    for row in shelf_data:
+        if row["ingredient_name"].lower() == normalized:
+            return {
+                "matched_name": row["ingredient_name"],
+                "default_unit": row.get("default_unit", "buah"),
+                "shelf_life_days": row.get("shelf_life_days"),
+                "category_id": row.get("category_id"),
+            }
+
+    # Fuzzy match
+    names = [r["ingredient_name"].lower() for r in shelf_data]
+    matches = get_close_matches(normalized, names, n=1, cutoff=0.7)
+    if matches:
+        for row in shelf_data:
+            if row["ingredient_name"].lower() == matches[0]:
+                return {
+                    "matched_name": row["ingredient_name"],
+                    "default_unit": row.get("default_unit", "buah"),
+                    "shelf_life_days": row.get("shelf_life_days"),
+                    "category_id": row.get("category_id"),
+                }
+
+    # Fallback
+    return {
+        "matched_name": None,
+        "default_unit": "buah",
+        "shelf_life_days": None,
+        "category_id": None,
+    }
+
+
+def _get_default_shelf_life() -> dict[str, int]:
+    return {
+        "bayam": 3, "kangkung": 3, "sawi": 5, "wortel": 14,
+        "kentang": 21, "tomat": 7, "brokoli": 5, "kol": 7,
+        "cabai merah": 7, "cabai rawit": 7, "cabai hijau": 7,
+        "ayam": 2, "daging sapi": 3, "daging kambing": 3,
+        "ikan segar": 2, "udang": 2, "telur": 21,
+        "tempe": 3, "tahu": 3,
+        "bawang merah": 14, "bawang putih": 14, "jahe": 21,
+        "kunyit": 14, "lengkuas": 14, "serai": 14,
+    }
+
 
 def estimate_expiry_date(
     item_name: str,
@@ -121,51 +263,39 @@ def estimate_expiry_date(
 
     shelf_life = _load_shelf_life_cache()
     normalized = normalize_ingredient_name(item_name)
-    
-    # Cari durasi (days)
+
     days = shelf_life.get(normalized)
 
-    # Fallback ke kata pertama jika kata majemuk tidak ketemu
     if days is None and " " in normalized:
         days = shelf_life.get(normalized.split()[0])
 
     if days is None:
-        days = 5 # Default jika benar-benar tidak dikenal
+        names = list(shelf_life.keys())
+        matches = get_close_matches(normalized, names, n=1, cutoff=0.6)
+        if matches:
+            days = shelf_life[matches[0]]
+
+    if days is None:
+        days = 5
 
     base = from_date or date.today()
     return base + timedelta(days=days)
 
-# ---------------------------------------------------------------------------
-# Database Sync
-# ---------------------------------------------------------------------------
-
-def _load_shelf_life_cache() -> dict[str, int]:
-    global _shelf_life_cache
-    if _shelf_life_cache is not None:
-        return _shelf_life_cache
-    try:
-        sb = get_supabase()
-        result = sb.table("shelf_life_reference").select("*").execute()
-        _shelf_life_cache = {row["ingredient_name"].lower(): row["shelf_life_days"] for row in result.data}
-    except:
-        _shelf_life_cache = _get_default_shelf_life()
-    return _shelf_life_cache
-
-def _get_default_shelf_life() -> dict[str, int]:
-    return {
-        "sayur": 3, "bayam": 2, "kangkung": 2, "sawi": 3, 
-        "wortel": 7, "ayam": 2, "daging": 3, "telur": 21,
-        "tempe": 2, "tahu": 3, "susu": 5, "cabai": 7, "ikan": 2
-    }
 
 def resolve_category_from_shelf_life(item_name: str) -> int | None:
     try:
         sb = get_supabase()
         normalized = normalize_ingredient_name(item_name)
         keyword = normalized.split()[0]
-        result = sb.table("shelf_life_reference").select("category_id").ilike("ingredient_name", f"%{keyword}%").limit(1).execute()
+        result = (
+            sb.table("shelf_life_reference")
+            .select("category_id")
+            .ilike("ingredient_name", f"%{keyword}%")
+            .limit(1)
+            .execute()
+        )
         if result.data:
             return result.data[0]["category_id"]
-    except:
+    except Exception:
         pass
     return None

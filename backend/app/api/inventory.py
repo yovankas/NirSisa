@@ -16,9 +16,21 @@ from app.services.inventory_service import (
     prepare_insert_row,
     reconcile_inventory,
 )
-from app.services.normalizer import normalize_ingredient_name
+from app.services.normalizer import normalize_ingredient_name, suggest_unit
 
 router = APIRouter(prefix="/inventory", tags=["Inventory"])
+
+
+@router.get("/unit-suggest")
+async def get_unit_suggestion(item_name: str):
+    result = suggest_unit(item_name)
+    return {
+        "item_name": item_name,
+        "matched_name": result["matched_name"],
+        "default_unit": result["default_unit"],
+        "shelf_life_days": result["shelf_life_days"],
+        "category_id": result["category_id"],
+    }
 
 # GET  /inventory  — Daftar seluruh stok user
 @router.get("", response_model=list[InventoryItemResponse])
