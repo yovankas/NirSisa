@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any, Optional # Pastikan Optional diimport
+from typing import Any, Optional
 
 
 from app.core.supabase import get_supabase
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Inventory CRUD helpers
 
 def enrich_inventory_item(item: dict[str, Any]) -> dict[str, Any]:
-    # Tambahkan field kalkulasi: days_remaining, spi_score, freshness_status 
+    # Tambahkan field kalkulasi: days_remaining, spi_score, freshness_status
     expiry = item.get("expiry_date")
     if expiry and isinstance(expiry, str):
         expiry = date.fromisoformat(expiry)
@@ -40,30 +40,31 @@ def enrich_inventory_item(item: dict[str, Any]) -> dict[str, Any]:
     item["freshness_status"] = status
     return item
 
+
 def get_category_id_from_name(name: str) -> Optional[int]:
-    # Mapping dari Label UI (Frontend) ke ID Database (berdasarkan screenshot Anda)
+    # Mapping dari Label UI (Frontend) ke ID Database
     mapping = {
-        "sayuran": 1,           # sayur
-        "buah-Buahan": 2,       # buah
-        "daging Sapi": 3,       # daging_sapi
-        "daging Ayam": 4,       # daging_ayam
-        "daging Kambing": 5,    # daging_kambing
-        "ikan": 6,              # ikan_segar
-        "udang": 7,             # udang
-        "telur": 8,             # telur
-        "tahu": 9,              # tahu
-        "tempe": 10,            # tempe
-        "susu & Olahan": 11,    # dairy
-        "bumbu Segar": 12,      # bumbu_segar
-        "bumbu Kering": 13,     # bumbu_kering
-        "produk Jadi": 14,      # bahan_olahan
-        "minyak & Lemak": 15,   # minyak_lemak
-        "tepung": 16,           # tepung_kering
-        "kacang-kacangan": 17,  # kacang_biji
-        "roti & Bakery": 18,    # roti_bakery
+        "sayuran": 1,
+        "buah-Buahan": 2,
+        "daging Sapi": 3,
+        "daging Ayam": 4,
+        "daging Kambing": 5,
+        "ikan": 6,
+        "udang": 7,
+        "telur": 8,
+        "tahu": 9,
+        "tempe": 10,
+        "susu & Olahan": 11,
+        "bumbu Segar": 12,
+        "bumbu Kering": 13,
+        "produk Jadi": 14,
+        "minyak & Lemak": 15,
+        "tepung": 16,
+        "kacang-kacangan": 17,
+        "roti & Bakery": 18,
     }
-    if not name: return None
-    # .lower() akan mengubah "Sayuran" atau "SAYURAN" menjadi "sayuran"
+    if not name:
+        return None
     return mapping.get(name.lower())
 
 
@@ -74,24 +75,23 @@ def prepare_insert_row(
     unit: str,
     is_natural: bool,
     expiry_date: date | None,
-    category_name: Optional[str] = None, # <--- TAMBAHKAN PARAMETER INI
+    category_name: Optional[str] = None,
 ) -> dict[str, Any]:
-    
+
     normalized = normalize_ingredient_name(item_name)
-    
-    # LOGIKA BARU: 
-    # Jika user memilih kategori di HP, kita cari ID-nya. 
-    # Jika tidak memilih, baru gunakan fungsi pencarian otomatis (AI/Lookup).
+    if not normalized:
+        normalized = item_name.strip().lower()
+
     category_id = None
     if category_name:
         category_id = get_category_id_from_name(category_name)
-    
+
     if not category_id:
         category_id = resolve_category_from_shelf_life(normalized)
 
     row: dict[str, Any] = {
         "user_id": user_id,
-        "item_name": item_name.strip(),
+        "item_name": normalized,
         "item_name_normalized": normalized,
         "quantity": quantity,
         "unit": unit,
@@ -101,45 +101,62 @@ def prepare_insert_row(
     if category_id:
         row["category_id"] = category_id
 
-    # Logika Expiry tetap sama
     if expiry_date:
         row["expiry_date"] = expiry_date.isoformat()
     elif is_natural:
         estimated = estimate_expiry_date(normalized, is_natural=True)
         if estimated:
             row["expiry_date"] = estimated.isoformat()
-            logger.info("Auto-estimated expiry untuk '%s' → %s", item_name, estimated.isoformat())
+            logger.info(
+                "Auto-estimated expiry untuk '%s' → %s",
+                normalized, estimated.isoformat()
+            )
 
+    logger.info("prepare_insert_row: raw='%s' → normalized='%s'", item_name, normalized)
     return row
 
 
+# ============================================================================
 # Inventory Reconciliation (pengurangan stok setelah masak)
+# ============================================================================
 
 def reconcile_inventory(
     user_id: str,
-    recipe_id: int,
+    recipe_id: int | None,
     recipe_title: str,
     ingredients_used: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    # Kurangi stok bahan secara atomik setelah user konfirmasi selesai masak.
+    """
+    Kurangi stok bahan setelah user konfirmasi selesai masak,
+    dan catat ke consumption_history (parent) + consumption_history_items (children).
 
-    # Args:
-    #     user_id: ID pengguna.
-    #     recipe_id: ID resep yang dimasak.
-    #     recipe_title: Judul resep.
-    #     ingredients_used: List of dict dengan keys:
-    #         - item_id: UUID bahan di inventory_stock
-    #         - quantity_used: Jumlah yang digunakan
+    PERBAIKAN BESAR DARI VERSI LAMA:
+    - Versi lama mencoba insert ke tabel `consumption_history_log` yang TIDAK ADA
+      di schema. Sekarang pakai tabel yang sebenarnya: consumption_history +
+      consumption_history_items. Akibatnya RiwayatScreen sekarang akan terisi
+      data.
+    - recipe_id sekarang OPTIONAL. Recommender mengembalikan `index` (row pickle),
+      bukan DB primary key — jadi kita tidak bisa selalu set recipe_id.
+      Lebih aman None daripada FK error.
 
-    # Returns:
-    #     Dict ringkasan hasil reconciliation.
+    Args:
+        user_id: ID pengguna.
+        recipe_id: ID resep di DB (optional). None jika tidak diketahui.
+        recipe_title: Judul resep.
+        ingredients_used: List of dict dengan keys:
+            - item_id: UUID bahan di inventory_stock
+            - quantity_used: Jumlah yang digunakan
 
-    # Raises:
-    #     ValueError: Jika stok tidak cukup atau item tidak ditemukan.
-     
+    Returns:
+        Dict ringkasan hasil reconciliation.
+
+    Raises:
+        ValueError: Jika stok tidak cukup atau item tidak ditemukan.
+    """
     sb = get_supabase()
     updated_items: list[dict] = []
     deleted_items: list[str] = []
+    items_snapshot: list[dict] = []  # untuk consumption_history_items
 
     try:
         for usage in ingredients_used:
@@ -169,6 +186,14 @@ def reconcile_inventory(
 
             new_qty = current_qty - qty_used
 
+            # SNAPSHOT dulu sebelum delete (kalau new_qty <= 0 row akan hilang)
+            items_snapshot.append({
+                "inventory_stock_id": item_id,
+                "item_name": current.data["item_name"],
+                "quantity_used": qty_used,
+                "unit": current.data.get("unit"),
+            })
+
             if new_qty <= 0:
                 # Hapus item jika stok habis
                 sb.table("inventory_stock").delete().eq("id", item_id).eq("user_id", user_id).execute()
@@ -183,26 +208,40 @@ def reconcile_inventory(
                     "unit": current.data["unit"],
                 })
 
-        # Catat ke consumption_history_log
-        log_entry = {
-            "user_id": user_id,
-            "recipe_id": recipe_id,
-            "recipe_title": recipe_title,
-            "ingredients_snapshot": [
-                {
-                    "item_id": u["item_id"],
-                    "quantity_used": u["quantity_used"],
-                }
-                for u in ingredients_used
-            ],
-            "cooked_at": datetime.utcnow().isoformat(),
-        }
-
+        # ====================================================================
+        # Catat ke consumption_history (parent) + consumption_history_items
+        # PERBAIKAN: pakai schema yang BENAR sesuai 001_schema.sql
+        # ====================================================================
         try:
-            sb.table("consumption_history_log").insert(log_entry).execute()
-            logger.info("Riwayat konsumsi dicatat: resep '%s' oleh user %s", recipe_title, user_id)
+            parent_row: dict[str, Any] = {
+                "user_id": user_id,
+                "recipe_title": recipe_title,
+                "cooked_at": datetime.utcnow().isoformat(),
+            }
+            # recipe_id optional — hanya set kalau valid
+            # (recommender index ≠ DB primary key, jadi defaultnya None)
+            if recipe_id is not None:
+                parent_row["recipe_id"] = recipe_id
+
+            parent_result = sb.table("consumption_history").insert(parent_row).execute()
+
+            if parent_result.data:
+                consumption_id = parent_result.data[0]["id"]
+
+                # Insert children records
+                children_rows = [
+                    {**snap, "consumption_id": consumption_id}
+                    for snap in items_snapshot
+                ]
+                if children_rows:
+                    sb.table("consumption_history_items").insert(children_rows).execute()
+
+                logger.info(
+                    "Riwayat dicatat: '%s' (%d items) oleh user %s",
+                    recipe_title, len(items_snapshot), user_id
+                )
         except Exception as log_err:
-            # Log gagal tidak boleh menggagalkan reconciliation
+            # Log gagal tidak boleh menggagalkan reconciliation utama
             logger.warning("Gagal mencatat riwayat konsumsi: %s", log_err)
 
         return {
@@ -222,10 +261,9 @@ def reconcile_inventory(
 # Fetch inventory dengan SPI enrichment (untuk recommend endpoint)
 
 def get_user_inventory_with_spi(user_id: str) -> list[dict[str, Any]]:
-    # Ambil seluruh inventaris user, diperkaya dengan SPI score 
+    # Ambil seluruh inventaris user, diperkaya dengan SPI score
     sb = get_supabase()
 
-    # Coba gunakan view jika tersedia, fallback ke tabel langsung
     try:
         result = (
             sb.table("inventory_with_spi")
@@ -236,7 +274,6 @@ def get_user_inventory_with_spi(user_id: str) -> list[dict[str, Any]]:
         )
         return [enrich_inventory_item(row) for row in result.data]
     except Exception:
-        # Fallback: query langsung dari inventory_stock
         result = (
             sb.table("inventory_stock")
             .select("*")
