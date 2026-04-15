@@ -56,6 +56,7 @@ _ALIAS_MAP: dict[str, str] = {
     "pete": "petai",
     "touge": "tauge",
     "toge": "tauge",
+    "kecambah": "tauge",
     "daun bawang": "daun bawang",
     # coconut
     "santen": "santan",
@@ -90,6 +91,8 @@ _ALIAS_MAP: dict[str, str] = {
     "msg": "penyedap",
     "masako": "penyedap",
     "royco": "penyedap",
+    # fish
+    "salmok": "salmon",
 }
 
 # Abbreviation expansion (user input shorthand)
@@ -131,34 +134,53 @@ def normalize_ingredient_name(raw_name: str) -> str:
     if not cleaned:
         return ""
 
-    # Expand abbreviations
-    for abbr in sorted(_ABBREV_MAP.keys(), key=len, reverse=True):
-        if abbr in cleaned:
-            cleaned = cleaned.replace(abbr, _ABBREV_MAP[abbr])
+    # 1. Expand abbreviations (Gunakan word boundary agar lebih aman)
+    # Contoh: 'baput' -> 'bawang putih'
+    words = cleaned.split()
+    # Asumsi _ABBREV_MAP berisi singkatan-singkatan
+    expanded_words = [_ABBREV_MAP.get(w, w) for w in words]
+    cleaned = " ".join(expanded_words)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
-    # Exact alias match (longest first)
-    for alias in sorted(_ALIAS_MAP.keys(), key=len, reverse=True):
-        if alias == cleaned:
-            return _ALIAS_MAP[alias]
+    # 2. Exact alias match (Check seluruh kalimat)
+    if cleaned in _ALIAS_MAP:
+        return _ALIAS_MAP[cleaned]
 
-    # Substring alias match for compound names
+    # 3. Substring alias match untuk kata majemuk
+    # Mengubah 'cabe' menjadi 'cabai' di dalam kalimat 'cabai rawit'
     for alias in sorted(_ALIAS_MAP.keys(), key=len, reverse=True):
         if re.search(r"\b" + re.escape(alias) + r"\b", cleaned):
             cleaned = re.sub(r"\b" + re.escape(alias) + r"\b", _ALIAS_MAP[alias], cleaned)
             break
 
-    # Fuzzy match against shelf_life_reference + alias keys
+    # 4. Fuzzy match against shelf_life_reference + kamus inti
     shelf_life = _load_shelf_life_cache()
-    all_known = list(set(list(shelf_life.keys()) + list(_ALIAS_MAP.values())))
+    
+    # Tambahkan "bakso", "sawi", dll ke kamus agar bisa mencocokkan diri sendiri
+    # Jika tidak ada di sini, sistem dipaksa memilih yang paling mirip (biasanya salah)
+    essentials = ["bakso", "sawi", "tahu", "tempe", "ayam", "sapi", "ikan", "udang"]
+    all_known = list(set(list(shelf_life.keys()) + list(_ALIAS_MAP.values()) + essentials))
+    
+    # Gunakan cutoff 0.8 (80% mirip)
     matches = get_close_matches(cleaned, all_known, n=1, cutoff=0.8)
+    
     if matches:
         matched = matches[0]
-        if cleaned.split()[0][0] == matched.split()[0][0]:
+        
+        # --- PROTEKSI KATA PERTAMA (NOUN UTAMA) ---
+        input_first_word = cleaned.split()[0]
+        match_first_word = matched.split()[0]
+        
+        # JANGAN bandingkan cuma huruf depan [0][0]. 
+        # Bandingkan katanya secara UTUH.
+        # Jika 'bakso' != 'tahu', maka batalkan normalisasi otomatis.
+        if input_first_word == match_first_word:
             return matched
+        else:
+            logger.info(f"Pencocokan ditolak: {input_first_word} != {match_first_word}")
 
+    # Jika tidak ada match yang sangat yakin, biarkan input user apa adanya (setelah dibersihkan)
     return cleaned
-
 
 def is_staple_ingredient(name: str) -> bool:
     normalized = normalize_ingredient_name(name)
@@ -311,14 +333,14 @@ def search_ingredients(query: str, limit: int = 10) -> list[dict]:
 
 def _get_default_shelf_life() -> dict[str, int]:
     return {
-        "bayam": 3, "kangkung": 3, "sawi": 5, "wortel": 14,
+        "bayam": 3,"bakso": 3,"bakso ikan": 3,"bakso sapi": 3,"kangkung": 3, "sawi": 5, "wortel": 14,
         "kentang": 21, "tomat": 7, "brokoli": 5, "kol": 7,
         "cabai merah": 7, "cabai rawit": 7, "cabai hijau": 7,
         "ayam": 2, "daging sapi": 3, "daging kambing": 3,
         "ikan segar": 2, "udang": 2, "telur": 21,
         "tempe": 3, "tahu": 3,
         "bawang merah": 14, "bawang putih": 14, "jahe": 21,
-        "kunyit": 14, "lengkuas": 14, "serai": 14,
+        "kunyit": 14, "lengkuas": 14, "serai": 14, "dada ayam": 2, "paha ayam": 2, "ayam": 2,
     }
 
 

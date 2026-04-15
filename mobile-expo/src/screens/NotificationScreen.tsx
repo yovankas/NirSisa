@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -7,22 +7,122 @@ import {
   TouchableOpacity,
   Image,
   Platform,
+  ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/AppNavigator";
+import { useFocusEffect } from "@react-navigation/native";
+import { supabase } from "../services/supabase";
+import { useAuth } from "../context/AuthContext";
+import axios from "axios";
 
 const LOGO_IMAGE = require("../assets/images/logo.png");
+const API_URL = "https://nirsisa-production.up.railway.app";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Notification">;
 
+interface NotificationItem {
+  id: string;
+  title: string;
+  body: string;
+  notification_type: "critical" | "warning" | "info";
+  sent_at: string;
+}
+
+interface TopRecommendation {
+  title: string;
+  ingredients: string;
+}
+
 const NotificationScreen: React.FC<Props> = ({ navigation }) => {
+  const { session } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [recommendation, setRecommendation] = useState<TopRecommendation | null>(null);
+
+  const fetchData = async () => {
+  if (!session?.user?.id) return;
+  setLoading(true);
+
+  try {
+    // 1. Ambil Log Notifikasi Resmi dari DB
+    const { data: notifData } = await supabase
+      .from("notification_log")
+      .select("*")
+      .eq("user_id", session.user.id)
+      .order("sent_at", { ascending: false })
+      .limit(5);
+
+    // 2. SMART DETECTION: Cek stok yang kritis secara real-time
+    // Ini adalah fallback jika tabel notification_log masih kosong
+    const { data: expiringInventory } = await supabase
+      .from("inventory_with_spi")
+      .select("item_name, days_remaining, freshness_status")
+      .eq("user_id", session.user.id)
+      .in("freshness_status", ["expired", "warning"]) // Ambil yang merah & kuning
+      .order("days_remaining", { ascending: true });
+
+    // 3. Gabungkan data (Buat notifikasi buatan dari stok yang ada)
+    const dynamicNotifs: NotificationItem[] = (expiringInventory || []).map((item, index) => ({
+      id: `dynamic-${index}`,
+      title: item.freshness_status === 'expired' ? "Sudah Kedaluwarsa!" : "Hampir Kedaluwarsa",
+      body: `${item.item_name} sebaiknya segera diolah. Sisa waktu: ${item.days_remaining} hari.`,
+      notification_type: item.freshness_status === 'expired' ? 'critical' : 'warning',
+      sent_at: new Date().toISOString()
+    }));
+
+    // Prioritaskan log resmi, jika kosong gunakan hasil deteksi otomatis
+    const finalNotifs = notifData && notifData.length > 0 
+      ? notifData 
+      : dynamicNotifs;
+
+    setNotifications(finalNotifs);
+
+    // 4. Ambil Rekomendasi AI (Tetap sama)
+    const res = await axios.get(`${API_URL}/recommend?top_k=1`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    
+    if (res.data.recommendations?.length > 0) {
+      setRecommendation(res.data.recommendations[0]);
+    }
+  } catch (error) {
+    console.error("Fetch Notifications Error:", error);
+  } finally {
+    setLoading(false);
+    setRefreshing(false);
+  }
+};
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [session])
+  );
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchData();
+  };
+
+  const getNotifStyle = (type: string) => {
+    switch (type) {
+      case "critical": return { color: "#BB0009", bg: "#FEE2E2", icon: "warning" as const };
+      case "warning": return { color: "#D97706", bg: "#FEF3C7", icon: "timer-outline" as const };
+      default: return { color: "#36393B", bg: "#F3F4F6", icon: "notifications-outline" as const };
+    }
+  };
+
   return (
     <View style={styles.flex}>
       <ScrollView
         style={styles.flex}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#BB0009" />}
       >
         {/* Header */}
         <View style={styles.header}>
@@ -35,55 +135,64 @@ const NotificationScreen: React.FC<Props> = ({ navigation }) => {
           </View>
         </View>
 
-        {/* Title */}
         <Text style={styles.title}>Notifikasi</Text>
         <Text style={styles.subtitle}>Jaga kesegaran dapur Anda dan kurangi limbah.</Text>
 
-        {/* Card 1 — Kedaluwarsa Besok */}
-        <View style={[styles.card, styles.cardRedBorder]}>
-          <View style={styles.cardIconWrap}>
-            <View style={[styles.iconCircle, { backgroundColor: "#FEE2E2" }]}>
-              <Ionicons name="warning" size={22} color="#BB0009" />
-            </View>
-            <View style={styles.cardBody}>
-              <Text style={styles.cardTitle}>Kedaluwarsa Besok</Text>
-              <Text style={styles.cardDesc}>
-                Bayam Organik dan Yogurt harus segera digunakan.
-              </Text>
-              <TouchableOpacity style={styles.primaryButton}>
-                <Text style={styles.primaryButtonText}>Lihat Resep</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
+        {loading && !refreshing ? (
+          <ActivityIndicator size="large" color="#BB0009" style={{ marginTop: 40 }} />
+        ) : (
+          <>
+            {/* AI Recommendation Card (Jika ada bahan kritis) */}
+            {recommendation && (
+              <View style={[styles.card, styles.cardAI]}>
+                <Text style={styles.cardAILabel}>Rekomendasi Chef AI</Text>
+                <Text style={styles.cardAIDesc}>
+                  Gunakan bahan yang hampir habis untuk memasak{" "}
+                  <Text style={styles.cardAIBold}>{recommendation.title}</Text> hari ini!
+                </Text>
+                <TouchableOpacity 
+                  style={styles.secondaryButton}
+                  onPress={() => navigation.navigate("Main", { screen: "ChefAI" })}
+                >
+                  <Text style={styles.secondaryButtonText}>Lihat Detail Resep</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
-        {/* Card 2 — Kedaluwarsa dalam 2 Hari */}
-        <View style={[styles.card, styles.cardOrangeBorder]}>
-          <View style={styles.cardIconWrap}>
-            <View style={[styles.iconCircle, { backgroundColor: "#FEF3C7" }]}>
-              <Ionicons name="timer-outline" size={22} color="#D97706" />
-            </View>
-            <View style={styles.cardBody}>
-              <Text style={styles.cardTitle}>Kedaluwarsa dalam 2 Hari</Text>
-              <Text style={styles.cardDesc}>
-                3 bahan di inventaris Anda termasuk mendekati tanggal kedaluwarsa.
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Card 3 — Rekomendasi Chef AI */}
-        <View style={[styles.card, styles.cardAI]}>
-          <Text style={styles.cardAILabel}>Rekomendasi Chef AI</Text>
-          <Text style={styles.cardAIDesc}>
-            Saya bisa membantu Anda membuat{" "}
-            <Text style={styles.cardAIBold}>Pasta Bayam Krim</Text>
-            {" "}malam ini menggunakan bahan yang hampir kedaluwarsa!
-          </Text>
-          <TouchableOpacity style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Mulai Masak</Text>
-          </TouchableOpacity>
-        </View>
+            {/* List Notifikasi dari DB */}
+            {notifications.length > 0 ? (
+              notifications.map((notif) => {
+                const style = getNotifStyle(notif.notification_type);
+                return (
+                  <View key={notif.id} style={[styles.card, { borderLeftWidth: 4, borderLeftColor: style.color }]}>
+                    <View style={styles.cardIconWrap}>
+                      <View style={[styles.iconCircle, { backgroundColor: style.bg }]}>
+                        <Ionicons name={style.icon} size={22} color={style.color} />
+                      </View>
+                      <View style={styles.cardBody}>
+                        <Text style={styles.cardTitle}>{notif.title}</Text>
+                        <Text style={styles.cardDesc}>{notif.body}</Text>
+                        {notif.notification_type === 'critical' && (
+                          <TouchableOpacity 
+                            style={[styles.primaryButton, { backgroundColor: style.color }]}
+                            onPress={() => navigation.navigate("Main", { screen: "ChefAI" })}
+                          >
+                            <Text style={styles.primaryButtonText}>Cari Resep</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+                  </View>
+                );
+              })
+            ) : (
+              <View style={styles.emptyState}>
+                <Ionicons name="notifications-off-outline" size={64} color="#D1D5DB" />
+                <Text style={styles.emptyText}>Semua bahan Anda masih segar!</Text>
+              </View>
+            )}
+          </>
+        )}
 
         <View style={{ height: 24 }} />
       </ScrollView>
@@ -230,6 +339,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#BB0009",
   },
+  emptyState: { alignItems: 'center', marginTop: 60, gap: 12 },
+  emptyText: { fontFamily: 'Inter_400Regular', color: '#9CA3AF', fontSize: 15 }
 });
 
 export default NotificationScreen;

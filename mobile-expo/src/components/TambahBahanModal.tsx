@@ -12,7 +12,8 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Switch, // Tambahkan Switch untuk opsi manual
+  Switch,
+  Keyboard, // Tambahkan Switch untuk opsi manual
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "../services/api";
@@ -153,11 +154,11 @@ const TambahBahanModal: React.FC<TambahBahanModalProps> = ({ visible, onSave, on
 
   const handleSave = () => {
     onSave({
-      nama,
-      kategori,
-      jumlah,
+      nama: nama,
+      kategori: kategori,
+      jumlah: jumlah,
       satuan: satuan || "pcs", // Default ke pcs jika kosong
-      isNatural,
+      isNatural: isNatural,
       tanggalExpired: formatToDBDate(tanggal),
     });
     handleClose();
@@ -177,8 +178,8 @@ const TambahBahanModal: React.FC<TambahBahanModalProps> = ({ visible, onSave, on
         <Animated.View style={[styles.backdrop, { opacity: backdropAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.45] }) }]} />
       </TouchableWithoutFeedback>
 
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.kavWrapper} pointerEvents="box-none">
-        <Animated.View style={[styles.sheet, { transform: [{ translateY: slideAnim }] }]}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.kavWrapper} pointerEvents="box-none">        
+          <Animated.View style={[styles.sheet, { transform: [{ translateY: slideAnim }] }]}>
           <View style={styles.dragHandle} />
           
           <View style={styles.sheetHeader}>
@@ -191,10 +192,10 @@ const TambahBahanModal: React.FC<TambahBahanModalProps> = ({ visible, onSave, on
             </TouchableOpacity>
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false} bounces={false} keyboardShouldPersistTaps="handled">
+          <ScrollView showsVerticalScrollIndicator={false} bounces={false} keyboardShouldPersistTaps="handled" onScrollBeginDrag={Keyboard.dismiss} contentContainerStyle={{ paddingBottom: 200 }} >
             
             <Text style={styles.fieldLabel}>NAMA BAHAN</Text>
-            <TextInput style={styles.textInput} placeholder="Contoh: Wortel" value={nama} onChangeText={handleNamaChange} onBlur={() => setTimeout(() => setShowSuggestions(false), 200)} />
+            <TextInput style={styles.textInput} placeholder="Contoh: Wortel" value={nama} onChangeText={handleNamaChange} onBlur={() => setTimeout(() => setShowSuggestions(false), 200)} importantForAutofill="no" selectTextOnFocus={true} />
             {showSuggestions && (
               <View style={styles.suggestionList}>
                 {suggestions.map((s, i) => (
@@ -253,7 +254,7 @@ const TambahBahanModal: React.FC<TambahBahanModalProps> = ({ visible, onSave, on
               <Text style={styles.saveButtonText}>Simpan ke Inventaris</Text>
             </TouchableOpacity>
 
-            <View style={{ height: 40 }} />
+            <View style={{ height: 100 }} />
           </ScrollView>
         </Animated.View>
       </KeyboardAvoidingView>
@@ -267,13 +268,15 @@ const styles = StyleSheet.create({
     backgroundColor: "#000000",
   },
   kavWrapper: {
+    flex: 1,
+    justifyContent: "flex-end",
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
   },
   sheet: {
-    height: SHEET_HEIGHT,
+    maxHeight: SCREEN_HEIGHT * 0.9, 
     backgroundColor: "#FFFFFF",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
@@ -284,6 +287,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 12,
     elevation: 12,
+    width: "100%",
   },
   dragHandle: {
     width: 40,

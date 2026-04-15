@@ -88,10 +88,10 @@ def prepare_insert_row(
 
     row: dict[str, Any] = {
         "user_id": user_id,
-        "item_name": normalized,
+        "item_name": item_name.strip(),
         "item_name_normalized": normalized,
         "quantity": quantity,
-        "unit": unit,
+        "unit": unit.strip().lower(),
         "is_natural": is_natural,
     }
 

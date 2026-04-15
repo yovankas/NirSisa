@@ -276,7 +276,7 @@ const HomeScreen: React.FC = () => {
         {/* Rekomendasi Chef AI */}
         <View style={[styles.sectionHeader, { marginTop: 28 }]}>
           <Text style={styles.sectionTitle}>Rekomendasi Chef AI</Text>
-          <TouchableOpacity onPress={() => navigation.navigate("Main", { screen: "ChefAI" })}>
+          <TouchableOpacity onPress={() => navigation.navigate("Main", { screen: "ChefAI" , params: { screen: "RecipeRecommendation" } })}>
             <Text style={styles.seeAll}>LIHAT SEMUA</Text>
           </TouchableOpacity>
         </View>

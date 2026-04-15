@@ -31,13 +31,39 @@ type Props = NativeStackScreenProps<ChefAIStackParamList, "RecipeDetail">;
 
 const STAPLE_INGREDIENTS = [
   "garam", "gula", "lada", "merica", "air", "minyak", "kecap", 
-  "penyedap", "msg", "masako", "royco", "tauco", "maizena", 
-  "bawang putih", "bawang merah", "saus", "cabe", "cabai", "bawang bombay"
+  "penyedap", "msg", "masako", "royco", "tauco", "maizena", "bawang",
+  "bawang putih", "bawang merah", "saus", "cabe", "cabai", "bawang bombay", "bumbu", "tumisan", "saus", "saos", "sambal", "minyak sayur", "telor", "telur", "ayam", "daging", "ikan", "udang", "tahu", "tempe",
 ];
 
 const checkIsStaple = (text: string): boolean => {
+  if (!text) return false;
+
+  // 1. Normalisasi teks ke huruf kecil
   const normalized = text.toLowerCase();
-  return STAPLE_INGREDIENTS.some(staple => normalized.includes(staple));
+
+  // 2. Buang angka, pecahan, dan simbol (Contoh: "2000", "1/2", ",", ".")
+  const noNumbers = normalized.replace(/[0-9/.,]/g, " ");
+
+  // 3. Buang satuan ukuran umum agar tidak dianggap sebagai nama bahan
+  // Kita buat regex untuk mencari satuan ukuran sebagai kata utuh (\b)
+  const noUnits = noNumbers.replace(/\b(ml|gr|g|kg|l|liter|sdt|sdm|tsp|tbsp|ons|cc|bungkus|bks|buah|pcs|batang|btg|siung|ikat|ruas|lembar|cm)\b/g, " ");
+
+  // 4. Bersihkan spasi berlebih dan ambil kata-kata yang tersisa
+  const cleanContent = noUnits.trim(); // Contoh: "2000 ml air" -> "air"
+  
+  if (!cleanContent) return false;
+
+  // 5. Cek apakah kata pertama atau kedua yang tersisa adalah staple
+  const tokens = cleanContent.split(/\s+/);
+  const firstToken = tokens[0];
+  const combinedToken = tokens.length > 1 ? `${tokens[0]} ${tokens[1]}` : tokens[0];
+
+  return STAPLE_INGREDIENTS.some(staple => {
+    const s = staple.toLowerCase();
+    // Cek apakah cocok dengan kata pertama (air, garam) 
+    // atau kombinasi dua kata (minyak goreng, bawang putih)
+    return firstToken === s || combinedToken.startsWith(s);
+  });
 };
 
 
@@ -84,6 +110,10 @@ const UNIT_ALIASES: Record<string, string> = {
   btg: "batang",
   siung: "siung",
   ikat: "ikat",
+  ruas: "ruas",
+  bungkus: "pcs",
+  bks: "pcs",
+  cc: "ml",
 };
 
 type UnitGroup = "weight" | "volume" | "count" | "other";
@@ -94,10 +124,10 @@ const normalizeUnit = (unit?: string | null): string | null => {
 };
 
 const getUnitGroup = (unit: string | null): UnitGroup | null => {
-  if (!unit) return null;
+  if (!unit) return "count";
   if (["g", "kg", "ons"].includes(unit)) return "weight";
   if (["ml", "l", "tsp", "tbsp"].includes(unit)) return "volume";
-  if (["pcs", "batang", "siung", "ikat"].includes(unit)) return "count";
+  if (["pcs", "batang", "siung", "ikat", "ruas", "jari", "jempol", "bungkus", "bks"].includes(unit)) return "count";
   return "other";
 };
 
@@ -130,6 +160,8 @@ const extractRequestedAmount = (
     return { quantity: null, unit: null };
   }
 
+  // Regex ini diperbaiki untuk menangkap: [angka] [satuan] [nama_bahan]
+  // Contoh: "1 ruas jahe" -> match[1]="1", match[2]="ruas"
   const match = normalized.match(
     /^(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:[.,]\d+)?)\s*([a-zA-Z]+)?/
   );
@@ -138,10 +170,11 @@ const extractRequestedAmount = (
     return { quantity: null, unit: null };
   }
 
-  return {
-    quantity: parseFractionNumber(match[1]),
-    unit: normalizeUnit(match[2] || null),
-  };
+  const quantity = parseFractionNumber(match[1]);
+  const unitRaw = match[2] || null;
+  const unit = normalizeUnit(unitRaw);
+
+  return { quantity, unit };
 };
 
 const convertToBase = (
@@ -165,9 +198,9 @@ const convertToBase = (
   }
 
   if (group === "count") {
-    if (["pcs", "batang", "siung", "ikat"].includes(unit)) {
-      return { group, value: quantity };
-    }
+    // UNTUK SEMUA SATUAN HITUNG (pcs, ruas, siung, btg)
+    // Nilai dasarnya adalah 1 unit itu sendiri.
+    return { group, value: quantity }; 
   }
 
   return null;
@@ -178,25 +211,28 @@ const convertRequestedToInventoryUnit = (
   requestedUnit: string | null,
   inventoryUnit: string | null
 ): number | null => {
-  if (quantity === null || !requestedUnit || !inventoryUnit) return null;
+  // Jika jumlah tidak diketahui (misal: "secukupnya"), kita tidak bisa potong otomatis
+  if (quantity === null) return null;
 
-  const normalizedInventoryUnit = normalizeUnit(inventoryUnit);
-  if (!normalizedInventoryUnit) return null;
+  const reqUnit = normalizeUnit(requestedUnit);
+  const invUnit = normalizeUnit(inventoryUnit);
 
-  const requestedBase = convertToBase(quantity, requestedUnit);
-  const inventoryBasePerUnit = convertToBase(1, normalizedInventoryUnit);
+  const reqBase = convertToBase(quantity, reqUnit || "pcs");
+  const invBase = convertToBase(1, invUnit || "pcs");
 
-  if (!requestedBase || !inventoryBasePerUnit) return null;
-  if (requestedBase.group !== inventoryBasePerUnit.group) return null;
+  if (!reqBase || !invBase) return null;
 
-  if (
-    requestedBase.group === "count" &&
-    normalizeUnit(requestedUnit) !== normalizedInventoryUnit
-  ) {
-    return null;
+  // Jika kelompoknya sama (misal sama-sama berat atau sama-sama hitungan)
+  if (reqBase.group === invBase.group) {
+    // Khusus untuk kelompok 'count' (pcs, ruas, siung), kita abaikan perbedaan nama satuan
+    // Jadi '1 ruas' resep bisa memotong '1 buah' jahe di stok
+    if (reqBase.group === "count") {
+      return quantity; 
+    }
+    return reqBase.value / invBase.value;
   }
 
-  return requestedBase.value / inventoryBasePerUnit.value;
+  return null;
 };
 
 const STOPWORDS = new Set([
@@ -219,6 +255,7 @@ const STOPWORDS = new Set([
   "siung",
   "ikat",
   "lembar",
+  "bungkus",
   "cm",
   "secukupnya",
   "sesuai",
@@ -234,13 +271,33 @@ const STOPWORDS = new Set([
   "bahan",
   "dan",
   "atau",
+  "geprek", "memarkan", "haluskan", "iris", "tipis", "kasar", "potong", "buang", 
+  "kulit", "kerasnya", "secukupnya", "sesuai", "selera", "bahan", "dan", "atau", "cincang",
+  "sendok", "makan", "teh", "gelas", "cup", "cc",
+  "cuci", "bersih", "seduh", "dirajang", "halus", "kasar", "iris", "matang", 
+  "rebus", "air", "panas", "tiriskan", "suir", "suwir"
 ]);
 
 const tokenizeIngredient = (text: string): string[] => {
+  // Peta sinonim untuk menyamakan ejaan
+  const SYNONYMS: Record<string, string> = {
+    "toge": "tauge",
+    "kecambah": "tauge",
+    "rawit": "cabai",
+    "cabe": "cabai",
+    "telor": "telur",
+    "bamer": "bawang",
+    "baput": "bawang"
+  };
+
   return normalizeText(text)
     .replace(/[0-9/.,]/g, " ")
     .split(/\s+/)
-    .map((token) => token.trim())
+    .map((token) => {
+       const t = token.trim();
+       // Jika ada di kamus sinonim, gunakan kata standarnya
+       return SYNONYMS[t] || t;
+    })
     .filter((token) => token.length >= 2 && !STOPWORDS.has(token));
 };
 
@@ -261,24 +318,36 @@ const scoreInventoryMatch = (
 
   if (!inventoryName) return 0;
 
-  if (hasWholePhrase(ingredientNormalized, inventoryName)) {
-    return 100;
-  }
-
-  const ingredientTokens = new Set(tokenizeIngredient(ingredientText));
+  // LOG: Tampilkan perbandingan kata dasar
+  const ingredientTokens = tokenizeIngredient(ingredientText);
   const inventoryTokens = tokenizeIngredient(inventoryName);
 
-  if (inventoryTokens.length === 0) return 0;
+  // Jika Anda punya "toge" di resep dan "tauge" di stok, 
+  // kita tambahkan bantuan manual di log agar terlihat
+  let finalScore = 0;
 
-  const overlap = inventoryTokens.filter((token) => ingredientTokens.has(token)).length;
+  if (hasWholePhrase(ingredientNormalized, inventoryName)) {
+    finalScore = 100 + inventoryName.length;
+  } else {
+    const ingredientSet = new Set(ingredientTokens);
+    const overlap = inventoryTokens.filter((token) => ingredientSet.has(token)).length;
+    
+    if (inventoryTokens.length > 0) {
+      finalScore = (overlap / inventoryTokens.length) * 90;
+    }
+  }
 
-  if (overlap === 0) return 0;
+  // --- LOG UNTUK BAHAN YANG SEDANG DICARI ---
+  // if (ingredientText.toLowerCase().includes("toge") || ingredientText.toLowerCase().includes("tauge")) {
+  //   console.log(`[DEBUG MATCHING]`);
+  //   console.log(`  Resep: "${ingredientText}"`);
+  //   console.log(`  Stok yg dicek: "${inventoryItem.item_name}"`);
+  //   console.log(`  Tokens Resep: [${ingredientTokens.join(", ")}]`);
+  //   console.log(`  Tokens Stok: [${inventoryTokens.join(", ")}]`);
+  //   console.log(`  Hasil Skor: ${finalScore.toFixed(2)}`);
+  // }
 
-  const ratio = overlap / inventoryTokens.length;
-
-  if (ratio === 1) return 90;
-  if (ratio >= 0.75) return 70;
-  return 0;
+  return finalScore;
 };
 
 const pickBestInventoryMatch = (
@@ -288,7 +357,12 @@ const pickBestInventoryMatch = (
   let best: InventoryItemResponse | null = null;
   let bestScore = 0;
 
-  for (const inv of inventory) {
+  // Urutkan stok berdasarkan panjang nama (spesifisitas)
+  const sortedInventory = [...inventory].sort(
+    (a, b) => (b.item_name?.length || 0) - (a.item_name?.length || 0)
+  );
+
+  for (const inv of sortedInventory) {
     const score = scoreInventoryMatch(ingredientText, inv);
     if (score > bestScore) {
       best = inv;
@@ -296,8 +370,14 @@ const pickBestInventoryMatch = (
     }
   }
 
-  if (bestScore < 70) return null;
-  return best;
+  // LOG: Kenapa gagal match?
+  if (bestScore < 70 && (ingredientText.toLowerCase().includes("toge") || ingredientText.toLowerCase().includes("tauge"))) {
+    console.log(`[RESULT] GAGAL: Skor tertinggi hanya ${bestScore.toFixed(2)}, butuh minimal 70.00`);
+  } else if (best && (ingredientText.toLowerCase().includes("toge") || ingredientText.toLowerCase().includes("tauge"))) {
+    console.log(`[RESULT] SUKSES: Match dengan "${best.item_name}" (Skor: ${bestScore.toFixed(2)})`);
+  }
+
+  return bestScore >= 70 ? best : null;
 };
 
 type IngredientMatchStatus =
@@ -397,7 +477,6 @@ const RecipeDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     return lines.map((text, idx) => {
 
       const isStaple = checkIsStaple(text);
-      const matched = pickBestInventoryMatch(text, inventory);
       const requested = extractRequestedAmount(text);
 
     if (isStaple) {
@@ -412,7 +491,7 @@ const RecipeDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         helperText: "Bahan pendukung (Asumsi Tersedia)",
       };
     }
-
+      const matched = pickBestInventoryMatch(text, inventory);
       if (!matched) {
         return {
           id: `ing-${idx}`,
@@ -435,6 +514,11 @@ const RecipeDetailScreen: React.FC<Props> = ({ route, navigation }) => {
 
       // Jika ada match nama bahan, tapi jumlah/satuan tidak bisa divalidasi,
       // tetap dianggap boleh lanjut masak. Hanya saja stok tidak dikurangi otomatis.
+      // Tambahkan ini sementara di dalam useMemo ingredientList
+      console.log(`DEBUG [${text}]:`);
+      console.log(`- Req: Qty=${requested.quantity}, Unit=${requested.unit}`);
+      console.log(`- Stock: Qty=${matched.quantity}, Unit=${matched.unit}`);
+      console.log(`- Result QtyToUse: ${quantityToUse}`);
       if (quantityToUse === null) {
         return {
           id: `ing-${idx}`,
@@ -656,6 +740,7 @@ const RecipeDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               <View key={item.id}>
                 <IngredientRow item={item} />
                 {index < ingredientList.length - 1 && <View style={styles.separator} />}
+                
               </View>
             ))}
           </View>
